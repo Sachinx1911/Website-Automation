@@ -1,0 +1,121 @@
+[
+  {
+    "id": "8f9a796a",
+    "enabled": true,
+    "official": true,
+    "name": "PIB (English)",
+    "kind": "pib",
+    "config": {
+      "reg": 3,
+      "lang": 1
+    }
+  },
+  {
+    "id": "034f3447",
+    "enabled": true,
+    "official": true,
+    "name": "PIB (मराठी)",
+    "kind": "pib",
+    "config": {
+      "reg": 1,
+      "lang": 9
+    }
+  },
+  {
+    "id": "94e56739",
+    "enabled": true,
+    "official": true,
+    "name": "AIR News",
+    "kind": "wordpress",
+    "config": {
+      "base": "https://newsonair.gov.in",
+      "params": {
+        "lang": "en",
+        "categories": "41706,33,39"
+      }
+    }
+  },
+  {
+    "id": "724a736d",
+    "enabled": true,
+    "official": false,
+    "name": "NextIAS",
+    "kind": "wordpress",
+    "config": {
+      "base": "https://www.nextias.com/ca",
+      "skip": [
+        "news in short"
+      ]
+    }
+  },
+  {
+    "id": "881f096e",
+    "enabled": true,
+    "official": false,
+    "name": "CrackitToday",
+    "kind": "wordpress",
+    "config": {
+      "base": "https://crackittoday.com",
+      "params": {
+        "categories": "4"
+      }
+    }
+  },
+  {
+    "id": "dd285cf5",
+    "enabled": true,
+    "official": false,
+    "name": "ForumIAS",
+    "kind": "wordpress",
+    "config": {
+      "base": "https://forumias.com/blog",
+      "params": {
+        "categories": "1566,1230"
+      }
+    }
+  },
+  {
+    "id": "4eac7e3e",
+    "enabled": true,
+    "official": false,
+    "name": "CivilsDaily",
+    "kind": "wordpress",
+    "config": {
+      "base": "https://www.civilsdaily.com",
+      "post_type": "news",
+      "params": {
+        "per_page": 30
+      }
+    }
+  },
+  {
+    "id": "3d6005c7",
+    "enabled": true,
+    "official": false,
+    "name": "PW OnlyIAS",
+    "kind": "wordpress",
+    "config": {
+      "base": "https://pwonlyias.com",
+      "post_type": "current-affairs",
+      "params": {
+        "per_page": 20
+      }
+    }
+  },
+  {
+    "id": "cf83bd3d",
+    "enabled": true,
+    "official": false,
+    "name": "Vision IAS",
+    "kind": "visionias",
+    "config": {}
+  },
+  {
+    "id": "717be141",
+    "enabled": true,
+    "official": false,
+    "name": "Dhyeya IAS",
+    "kind": "dhyeyaias",
+    "config": {}
+  }
+]

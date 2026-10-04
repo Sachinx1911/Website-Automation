@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CurrentFlow AI · MPSC Success</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ v('app.css') }}">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo"><i data-i="flow"></i></div>
+      <div><b>CurrentFlow AI</b><small>Automate Current Affairs</small></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-title">Dashboard</div>
+      <a href="#/dashboard" data-route="dashboard"><i data-i="home"></i>Dashboard</a>
+      <div class="nav-title">Content workspace</div>
+      <a href="#/sources" data-route="sources"><i data-i="bank"></i>Government Sources<span class="nav-count" id="nc-sources"></span></a>
+      <a href="#/discover" data-route="discover"><i data-i="search"></i>Discover Articles<span class="nav-count" id="nc-discover"></span></a>
+      <a href="#/selected" data-route="selected"><i data-i="file-check"></i>Selected Articles<span class="nav-count" id="nc-selected"></span></a>
+      <a href="#/queue" data-route="queue"><i data-i="layers"></i>Processing Queue<span class="nav-count live" id="nc-queue"></span></a>
+      <a href="#/published" data-route="published"><i data-i="news"></i>Published Articles</a>
+      <a href="#/review" data-route="review"><i data-i="check"></i>Review Center<span class="nav-count" id="nc-review"></span></a>
+      <div class="nav-title">Publishing</div>
+      <a href="#/wordpress" data-route="wordpress"><i data-i="wp"></i>WordPress</a>
+      <a href="#/scheduling" data-route="scheduling"><i data-i="calendar"></i>Article Scheduling</a>
+      <div class="nav-title">AI &amp; automation</div>
+      <a href="#/claude" data-route="claude"><i data-i="spark"></i>Claude Configuration</a>
+      <a href="#/seo" data-route="seo"><i data-i="globe"></i>SEO Configuration</a>
+      <a href="#/automation" data-route="automation"><i data-i="bolt"></i>Automation Rules<span class="nav-count" id="nc-rules"></span></a>
+      <a href="#/logs" data-route="logs"><i data-i="list"></i>Activity Logs</a>
+      <div class="nav-title">System</div>
+      <a href="#/settings" data-route="settings"><i data-i="gear"></i>Settings</a>
+    </nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="round menu" id="menu-btn" aria-label="Menu"><i data-i="menu"></i></button>
+      <form class="search-wrap" id="global-search">
+        <i data-i="search"></i>
+        <input class="search" id="global-q" placeholder="Search articles, sources, or topics…" autocomplete="off">
+        <kbd>Ctrl + K</kbd>
+      </form>
+      <div class="top-actions">
+        <button class="round" id="bell" aria-label="Notifications"><i data-i="bell"></i><span class="bell-dot" id="bell-dot"></span></button>
+        <button class="round" id="theme-btn" aria-label="Toggle theme"><i data-i="sun"></i></button>
+        <div class="profile" id="profile"><div class="avatar" id="who-avatar">S</div><div class="who"><b id="who-name">Sachin</b><span>Admin</span></div><i data-i="chev"></i></div>
+      </div>
+      <div class="notif" id="notif"></div>
+      <div class="gsearch" id="gsearch"></div>
+    </header>
+    <main class="page" id="view"></main>
+  </div>
+</div>
+
+<div class="bulkbar" id="bulkbar"></div>
+<div class="toasts" id="toasts"></div>
+<div class="modal-bg" id="modal"></div>
+
+<script src="{{ url_for('static', filename='app.js') }}?v={{ v('app.js') }}"></script>
+<script src="{{ url_for('static', filename='pages1.js') }}?v={{ v('pages1.js') }}"></script>
+<script src="{{ url_for('static', filename='pages2.js') }}?v={{ v('pages2.js') }}"></script>
+<script src="{{ url_for('static', filename='pages3.js') }}?v={{ v('pages3.js') }}"></script>
+<script src="{{ url_for('static', filename='pages4.js') }}?v={{ v('pages4.js') }}"></script>
+</body>
+</html>

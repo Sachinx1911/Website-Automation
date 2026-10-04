@@ -1,0 +1,18 @@
+[
+  {
+    "id": "4711238a",
+    "created": "2026-10-05T01:15:10",
+    "runs": 2,
+    "last_run": "2026-10-05T01:45:55",
+    "enabled": true,
+    "name": "Auto Fetch Government News",
+    "description": "Fetch latest articles every 30 minutes",
+    "trigger": "schedule",
+    "action": "fetch",
+    "conditions": {},
+    "config": {
+      "minutes": 30
+    },
+    "last_status": "success"
+  }
+]
