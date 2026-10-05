@@ -25,6 +25,7 @@ import activity
 import automation
 import ca
 import settings as cfg
+import similar
 
 log = logging.getLogger("currentflow")
 AID_RE = re.compile(r"^\d{8}-\d{6}-[a-f0-9]{4}$")
@@ -80,6 +81,7 @@ def summary(m: dict) -> dict:
         "seo": seo["score"], "words": seo["words"], "reading_min": seo["reading_min"],
         "notes": m.get("notes", ""), "log": m.get("log", [])[-12:],
         "approved_at": approved_at(m), "publish_error": m.get("publish_error", ""),
+        "sources": [m["source"]["source"]] + [r["source"] for r in m.get("related", [])],
     }
 
 
@@ -176,8 +178,16 @@ def notifications():
 def titles():
     data = ca.load_titles()
     used = ca.used_urls()
+    groups = similar.groups(data["items"]) if cfg.load_settings()["app"].get("combine_sources", True) else {}
+    lead_of = {i["url"]: lead for lead, g in groups.items() for i in g}
     for it in data["items"]:
         it["article_id"] = used.get(it["url"])
+        lead = lead_of.get(it["url"])
+        if lead:   # same story on several sources: Discover shows the lead row with the others listed under it
+            it["group"] = lead
+            it["also"] = [{"source": o["source"], "title": o["title"], "url": o["url"], "date": o.get("date", "")} for o in groups[lead] if o["url"] != it["url"]]
+            # already written from any of its sources -> the whole story counts as done (no duplicate article)
+            it["article_id"] = it["article_id"] or next((used[o["url"]] for o in groups[lead] if o["url"] in used), None)
     return jsonify(data)
 
 
@@ -220,23 +230,40 @@ def preview():
         return error(str(e)[:300])
 
 
+_select_lock = threading.Lock()   # automation rules may select from several threads at once
+
+
 def select_items(items: list[dict], user: str = "You") -> list[str]:
-    used = ca.used_urls()
-    known = {i["url"]: i for i in ca.load_titles()["items"]}
-    ids = []
-    for item in items:
-        if item.get("url") not in known and item.get("url") not in used:
-            continue  # ignore urls that did not come from a scan
-        item = known.get(item["url"], item)
-        if item["url"] in used:
-            ids.append(used[item["url"]])
-            continue
-        m = ca.create_selection(item)
-        ids.append(m["id"])
-        activity.log("Article selected", "Articles", item["title"], user=user, article_id=m["id"])
-        if cfg.load_settings()["app"].get("auto_extract", True):
-            threading.Thread(target=lambda a=m["id"]: _safe_extract(a), daemon=True).start()
-    return ids
+    with _select_lock:
+        all_titles = ca.load_titles()["items"]
+        used = ca.used_urls()
+        known = {i["url"]: i for i in all_titles}
+        combine = cfg.load_settings()["app"].get("combine_sources", True)
+        ids = []
+        for item in items:
+            if item.get("url") not in known and item.get("url") not in used:
+                continue  # ignore urls that did not come from a scan
+            item = known.get(item["url"], item)
+            if item["url"] in used:
+                ids.append(used[item["url"]])
+                continue
+            # the same story on other sources (not already written) is combined into this article
+            group = similar.group_of(item["url"], all_titles) if combine else []
+            done = next((used[g["url"]] for g in group if g["url"] in used), None)
+            if done:   # this story was already written from another source
+                ids.append(done)
+                continue
+            if group and item["url"] != group[0]["url"]:
+                item = group[0]   # the official / lead source becomes the main one
+            related = [g for g in group if g["url"] != item["url"]]
+            m = ca.create_selection(item, related)
+            for u in [item["url"]] + [r["url"] for r in related]:
+                used[u] = m["id"]
+            ids.append(m["id"])
+            activity.log("Article selected", "Articles", item["title"] + (f" (+{len(related)} more sources)" if related else ""), user=user, article_id=m["id"])
+            if cfg.load_settings()["app"].get("auto_extract", True):
+                threading.Thread(target=lambda a=m["id"]: _safe_extract(a), daemon=True).start()
+        return ids
 
 
 def _safe_extract(aid):
@@ -273,6 +300,7 @@ def article(aid):
     except FileNotFoundError:
         abort(404)
     return jsonify(summary(m) | {"article": m.get("article"), "source_text": m.get("source_text", ""),
+                                 "related": m.get("related", []), "related_texts": m.get("related_texts", []),
                                  "source_image": m.get("source_image", ""), "log": m.get("log", []),
                                  "seo_detail": ca.seo_score(m), "template_id": m.get("template_id")})
 

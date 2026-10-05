@@ -14,11 +14,13 @@ Statuses
 """
 
 import json
+import logging
 import mimetypes
 import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -99,8 +101,14 @@ def all_articles() -> list[dict]:
 
 
 def used_urls() -> dict[str, str]:
-    """source url -> article id (so Discover can show what is already selected/written)."""
-    return {m["source"]["url"]: m["id"] for m in all_articles()}
+    """source url -> article id (so Discover can show what is already selected/written).
+    The other sources an article was combined from count as used too."""
+    used = {}
+    for m in all_articles():
+        for r in m.get("related", []):
+            used.setdefault(r["url"], m["id"])
+        used[m["source"]["url"]] = m["id"]
+    return used
 
 
 def log(meta: dict, msg: str, level: str = "info") -> None:
@@ -118,13 +126,19 @@ def set_status(aid: str, status: str, msg: str = "", level: str = "info", **extr
     return meta
 
 
-def create_selection(item: dict) -> dict:
-    """A title picked in Discover becomes an article with status 'selected'."""
+SOURCE_KEYS = ("title", "url", "source", "source_id", "date", "category", "excerpt")
+
+
+def create_selection(item: dict, related: list[dict] | None = None) -> dict:
+    """A title picked in Discover becomes an article with status 'selected'.
+    related: the same story on other sources; the article is written from all of them."""
     aid = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     meta = {"id": aid, "status": "selected", "created": datetime.now().isoformat(timespec="seconds"),
-            "source": {k: item.get(k, "") for k in ("title", "url", "source", "source_id", "date", "category", "excerpt")},
+            "source": {k: item.get(k, "") for k in SOURCE_KEYS},
+            "related": [{k: r.get(k, "") for k in SOURCE_KEYS} for r in related or []],
             "notes": "", "log": []}
-    log(meta, "Article added to selection")
+    log(meta, "Article added to selection" + (f" (same news on {len(meta['related']) + 1} sources: "
+                                              + ", ".join([item.get("source", "")] + [r.get("source", "") for r in related]) + ")" if related else ""))
     save(meta)
     return meta
 
@@ -227,21 +241,59 @@ def download_image(aid: str, url: str) -> bool:
 
 # ---------------------------------------------------------------- pipeline steps
 
+RELATED_CHARS = 12000   # per extra source, keeps the combined prompt a sensible size
+
+
+def _fetch_related(meta: dict) -> list[dict]:
+    """Read the other sources of a combined story in parallel; a page that cannot be read gets an 'error'."""
+    def one(r):
+        try:
+            src = fetch_source(r["url"])
+            return {**r, "text": src["text"][:RELATED_CHARS], "full": src["text"], "image": src["image"]}
+        except Exception as e:
+            return {**r, "error": str(e)[:200]}
+    rel = meta.get("related") or []
+    if not rel:
+        return []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return list(pool.map(one, rel))
+
+
 def extract(aid: str) -> dict:
-    """Fetch the source article text and image. selected -> extracted."""
+    """Fetch the source article text and image (and those of the same story on other sources). selected -> extracted."""
     meta = load(aid)
     meta.update(step="fetching")
-    log(meta, "Fetching source content")
+    log(meta, "Fetching source content" + (f" from {len(meta['related']) + 1} sources" if meta.get("related") else ""))
     save(meta)
     try:
-        src = fetch_source(meta["source"]["url"])
+        try:
+            src, main_error = fetch_source(meta["source"]["url"]), None
+        except Exception as e:
+            src, main_error = None, e
+        others = _fetch_related(meta)
         meta = load(aid)
-        meta.update(source_text=src["text"], source_image=src["image"], step="")
-        if src["image"] and not featured_image(aid) and cfg.load_settings()["publish"].get("image_source", "source") == "source":
-            meta["image_downloaded"] = download_image(aid, src["image"])
+        if src is None:
+            ok = next((o for o in others if o.get("text")), None)
+            if not ok:
+                raise main_error
+            # the lead page could not be read: another source of the same story takes its place
+            log(meta, f"{meta['source']['source']} could not be read ({str(main_error)[:120]}); using {ok['source']} as the main source")
+            meta["related"] = [meta["source"]] + [r for r in meta["related"] if r["url"] != ok["url"]]
+            meta["source"] = {k: ok.get(k, "") for k in SOURCE_KEYS}
+            src = {"text": ok["full"], "image": ok["image"]}
+            others = [o for o in others if o["url"] != ok["url"]]
+        read = [o for o in others if o.get("text")]
+        meta.update(source_text=src["text"], source_image=src["image"] or next((o["image"] for o in read if o.get("image")), ""), step="",
+                    related_texts=[{k: o[k] for k in ("source", "title", "url", "text")} for o in read])
+        if meta["source_image"] and not featured_image(aid) and cfg.load_settings()["publish"].get("image_source", "source") == "source":
+            meta["image_downloaded"] = download_image(aid, meta["source_image"])
         if meta["status"] == "selected":
             meta["status"] = "extracted"
-        log(meta, f"Source content extracted ({len(src['text'].split())} words)", "ok")
+        log(meta, f"Source content extracted ({len(src['text'].split())} words)"
+                  + (f" + {len(read)} more source{'s' if len(read) > 1 else ''} ({sum(len(o['text'].split()) for o in read)} words)" if read else ""), "ok")
+        for o in others:
+            if o.get("error"):
+                log(meta, f"Skipped {o['source']}: {o['error']}")
         save(meta)
         return meta
     except Exception as e:
@@ -288,17 +340,32 @@ def build_prompt(meta: dict, template: dict | None = None) -> tuple[str, str, di
     if seo.get("internal_links", True):
         rules.append(f"Use at most {seo.get('max_internal_links', 3)} internal links.")
     rules.append(f"Keep the slug under {seo.get('slug_max', 70)} characters.")
+    related = meta.get("related_texts") or []
     if con.get("source_link"):
-        rules.append("End the article with a short 'स्रोत' line linking to the original URL.")
+        rules.append("End the article with a short 'स्रोत' line linking to the original URL"
+                     + ("s (one link per source)." if related else "."))
     if con.get("disclaimer"):
         rules.append("Append this disclaimer paragraph at the very end: " + con["disclaimer"])
     if con.get("language_note"):
         rules.append(con["language_note"])
     system = template["system"] + ("\n\n## Output rules\n" + "\n".join(f"- {r}" for r in rules) if rules else "")
     src = meta["source"]
-    user = cfg.render_user_prompt(template["user"], title=src["title"], source=src["source"],
+    content, source_names = meta.get("source_text", ""), src["source"]
+    if related:
+        # the same story from several websites: give Claude every version, clearly separated
+        parts = [(src["source"], src["title"], src["url"], content)] + [(r["source"], r["title"], r["url"], r["text"]) for r in related]
+        content = "\n\n".join(f"===== Source {i} of {len(parts)}: {name} =====\nTitle: {title}\nURL: {url}\n\n{text}"
+                              for i, (name, title, url, text) in enumerate(parts, 1))
+        source_names = ", ".join(p[0] for p in parts)
+    user = cfg.render_user_prompt(template["user"], title=src["title"], source=source_names,
                                   category=src.get("category", ""), date=src.get("date", ""), url=src["url"],
-                                  extracted_content=meta.get("source_text", ""))
+                                  extracted_content=content)
+    if related:
+        user += (f"\n\nThe same news was reported by {len(related) + 1} different websites (all given above). "
+                 "Write ONE complete article that combines the facts from every source, so nothing important that any "
+                 "source mentions is missing. Do not repeat the same point twice. If the sources disagree on a number, "
+                 "date or name, use the official government source (PIB) when present, otherwise the most specific "
+                 "source, and never invent facts. If one source turns out to be about a different event, ignore it.")
     context = "Website categories (choose only from these):\n" + "\n".join(f"- {c}" for c in cats)
     if s["quick"].get("internal_links"):
         context += "\n\nSite's older posts (for internal links):\n" + "\n".join(f"- {t} | {u}" for t, u in posts[:150])
@@ -572,16 +639,25 @@ class Worker:
             if aid in self.queue:
                 self.queue.remove(aid)
 
+    @staticmethod
+    def _writers() -> int:
+        try:
+            return max(1, int(cfg.load_settings().get("writers", 2)))
+        except (TypeError, ValueError):  # a bad setting must not stop the writer threads
+            return 2
+
     def _run(self) -> None:
         while True:
             with self.cv:
-                while not self.queue or self.active >= max(1, int(cfg.load_settings().get("writers", 2))):
+                while not self.queue or self.active >= self._writers():
                     self.cv.wait(timeout=2)
                 aid = self.queue.pop(0)
                 self.active += 1
             try:
                 if load(aid)["status"] == "queued":
                     generate(aid)
+            except Exception:  # keep the thread alive; generate() records its own errors on the article
+                logging.getLogger(__name__).exception("Writer failed on %s", aid)
             finally:
                 with self.cv:
                     self.active -= 1

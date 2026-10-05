@@ -1,10 +1,13 @@
 /* CurrentFlow — Approved Articles: everything that passed review and is on its way to WordPress */
 
-const AP_STAGES = ['approved', 'draft', 'scheduled', 'changes'];
+const AP_STAGES = ['approved', 'scheduled', 'changes'];
 const AP_TABS = [['all', 'All'], ['ready', 'Ready to Publish'], ['scheduled', 'Scheduled'], ['changes', 'Pending Changes'], ['failed', 'Failed']];
 const AP_FILTERS = ['apQ', 'apCat', 'apSrc', 'apStatus', 'apFrom', 'apTo'];
 const apFailed = a => !!a.publish_error && a.status !== 'published';
-const apIn = a => AP_STAGES.includes(a.status) || apFailed(a);
+// "draft" also means "Claude just wrote it and auto-saved a WordPress draft" (not reviewed yet),
+// so a draft belongs here only if it was approved at some point
+const apIn = a => AP_STAGES.includes(a.status) || (a.status === 'draft' && !!a.approved_at) || apFailed(a);
+const apReadyCount = () => S.articles.filter(a => apIn(a) && apGroup(a) === 'ready').length;
 const apGroup = a => apFailed(a) ? 'failed' : a.status === 'scheduled' ? 'scheduled' : a.status === 'changes' ? 'changes' : 'ready';
 const apWhen = a => a.approved_at || a.finished || a.updated || '';
 const apStatusLabel = a => ({ failed: 'Failed', scheduled: 'Scheduled', changes: 'Pending Changes', ready: a.status === 'draft' ? 'Ready to Publish (WordPress draft)' : 'Ready to Publish' })[apGroup(a)];
@@ -118,8 +121,8 @@ function apRow(a, n) {
     <td class="row-meta ap-c-num">${n}</td>
     <td class="ap-c-thumb">${thumb(a)}</td>
     <td><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${a.excerpt ? `<div class="ap-ex ${mr(a.excerpt)}">${esc(a.excerpt)}</div>` : ''}
-      <div class="ap-inline">${srcLogo(a.source.source, 'xs')}<span class="ap-src">${esc(a.source.source)}</span>${catPill(a.categories[0])}<span class="ap-inline-date">${fmtDate(apWhen(a))}, ${fmtTime(apWhen(a))}</span><span class="ap-inline-status">${apBadge(a)}</span></div></td>
-    <td class="ap-c-src"><div class="tcell" style="gap:8px">${srcLogo(a.source.source, 'sm')}<span class="ap-src">${esc(a.source.source)}</span></div></td>
+      <div class="ap-inline">${srcLogo(a.source.source, 'xs')}<span class="ap-src">${esc(a.source.source)}</span>${srcCount(a)}${catPill(a.categories[0])}<span class="ap-inline-date">${fmtDate(apWhen(a))}, ${fmtTime(apWhen(a))}</span><span class="ap-inline-status">${apBadge(a)}</span></div></td>
+    <td class="ap-c-src"><div class="tcell" style="gap:8px">${srcLogo(a.source.source, 'sm')}<span class="ap-src">${esc(a.source.source)}</span></div>${srcCount(a)}</td>
     <td class="ap-c-cat">${catPill(a.categories[0])}</td>
     <td class="row-meta ap-c-date" style="white-space:nowrap">${fmtDate(apWhen(a))}<br>${fmtTime(apWhen(a))}</td>
     <td class="ap-c-status">${apStatus(a)}</td>

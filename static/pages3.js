@@ -241,6 +241,7 @@ ROUTES.settings = async function (first) {
       ${row('app.auto_extract', s.app.auto_extract, 'Auto-extract on select', 'Fetch source content right after selecting')}
       ${row('publish.auto_draft', s.publish.auto_draft, 'Auto-save WordPress draft', 'Send every finished article to WordPress as a draft')}
       ${row('app.duplicate_check', s.app.duplicate_check, 'Enable duplicate check', 'Skip titles that were already selected or written')}
+      ${row('app.combine_sources', s.app.combine_sources !== false, 'Combine same news from several sources', 'When websites report the same story, write one article from all of them')}
       ${row('publish.rankmath_meta', s.publish.rankmath_meta, 'Auto-generate SEO data', 'Send Rank Math keyword, title and description')}
       ${row('publish.featured_image', s.publish.featured_image, 'Upload featured image', 'Attach the image to the WordPress post')}</div>
     <div class="card section">${head('send', 'green', 'Default Publishing Settings', 'Set default options for article publishing.')}

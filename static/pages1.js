@@ -101,7 +101,7 @@ function queueTable(rows, withCheck = true) {
   ${rows.map((a, i) => { const [stg, pct, cls] = stageOf(a); const live = a.status === 'writing'; return `<tr class="clickable ${S.asel.has(a.id) ? 'on' : ''}" data-href="#/article/${a.id}">
     ${withCheck ? `<td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td>` : ''}
     <td class="row-meta">${i + 1}</td>
-    <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${a.error ? `<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error.slice(0, 90))}</div>` : ''}</div></div></td>
+    <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${srcCount(a)}${a.error ?`<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error.slice(0, 90))}</div>` : ''}</div></div></td>
     <td><div class="tcell">${srcLogo(a.source.source, 'sm')}<span style="font-size:12.5px">${esc(a.source.source)}</span></div></td>
     <td><span class="stage-pill ${cls}">${stg}</span></td>
     <td><div class="prog-cell"><div class="progress ${pct === 100 ? 'done' : ''} ${live ? 'live' : ''}"><i style="width:${pct}%"></i></div>${pct}%</div></td>
@@ -244,13 +244,18 @@ document.addEventListener('change', e => {
 });
 
 // ------------------------------------------------------------------ DISCOVER
+// the same story on other websites, shown under its row (it is written once, from all of them)
+const alsoLine = i => i.also?.length ? `<div class="also">${icon('layers')}<span>Same news also on</span>${i.also.map(o => `<a href="${esc(o.url)}" target="_blank" title="${esc(o.title)}">${srcLogo(o.source, 'xs')}${esc(o.source)}</a>`).join('')}</div>` : '';
 function feedItems() {
   const { q, src, cat, when, sort } = S.feed, t = today();
   const limit = new Date(); limit.setDate(limit.getDate() - 2);
   const min = limit.toLocaleDateString('en-CA');
-  const items = S.titles.items.filter(i => (!src || i.source === src) && (!cat || i.category === cat)
-    && (!q || i.title.toLowerCase().includes(q.toLowerCase()))
-    && (when === 'all' || (when === 'today' ? i.date === t : (i.date || t) >= min)));
+  const fits = (i, c) => (!src || i.source === src) && (!cat || c === cat) && (!q || i.title.toLowerCase().includes(q.toLowerCase()));
+  // a story found on several sources is listed once (its lead row); a filter matching any of its sources keeps it
+  const latest = i => [i.date || t, ...(i.also || []).map(o => o.date || '')].sort().pop();   // newest date of any of its sources
+  const items = S.titles.items.filter(i => (!i.group || i.group === i.url)
+    && (fits(i, i.category) || (i.also || []).some(o => fits(o, i.category)))
+    && (when === 'all' || (when === 'today' ? latest(i) === t : latest(i) >= min)));
   if (sort === 'title') items.sort((a, b) => a.title.localeCompare(b.title));
   if (sort === 'source') items.sort((a, b) => a.source.localeCompare(b.source));
   return items;
@@ -290,7 +295,7 @@ ROUTES.discover = async function (first) {
       ${slice.length ? slice.map(i => { const used = !!i.article_id, on = S.sel.has(i.url); return `<div class="disc-row ${on ? 'on' : ''} ${used ? 'used' : ''}" data-url="${esc(i.url)}">
         <div class="cb ${on ? 'on' : used ? 'dis' : ''}" data-act="pick" data-url="${esc(i.url)}">${icon('tick')}</div>
         <div class="thumb lazy-thumb ph-thumb" data-url="${esc(i.url)}" style="width:80px;height:56px;background:linear-gradient(135deg,${colorFor(i.source)[1]},${colorFor(i.source)[0]})">${esc(initials(i.source))}</div>
-        <div class="dmain" style="min-width:0"><div class="dt ${mr(i.title)}" data-act="preview" data-url="${esc(i.url)}">${esc(i.title)}</div><div class="ds lazy-desc ${mr(i.excerpt)}" data-url="${esc(i.url)}">${esc(i.excerpt || '')}</div>${used ? `<span class="badge b-used" style="margin-top:4px">${i.article_id ? 'Already selected' : ''}</span>` : ''}</div>
+        <div class="dmain" style="min-width:0"><div class="dt ${mr(i.title)}" data-act="preview" data-url="${esc(i.url)}">${esc(i.title)}</div><div class="ds lazy-desc ${mr(i.excerpt)}" data-url="${esc(i.url)}">${esc(i.excerpt || '')}</div>${alsoLine(i)}${used ? `<span class="badge b-used" style="margin-top:4px">${i.article_id ? 'Already selected' : ''}</span>` : ''}</div>
         <div class="dsrc">${srcLogo(i.source, 'sm')}<span>${esc(i.source)}</span></div>
         <div class="row-meta">${fmtDate(i.date)}</div>
         <div class="dcat">${catPill(i.category)}</div>
@@ -313,6 +318,7 @@ function previewPane(pv) {
     <div class="pv-meta"><div class="tcell">${srcLogo(it.source, 'sm')}<b>${esc(it.source)}</b></div><div>${icon('calendar')} ${fmtDate(it.date)}</div></div>
     <div class="pv-meta"><span>Category</span>${catPill(it.category)}</div>
     <label class="lbl">Original Source URL</label><a class="pv-url" href="${esc(it.url)}" target="_blank">${icon('link')}<span>${esc(it.url)}</span>${icon('ext')}</a>
+    ${it.also?.length ? `<label class="lbl">Same news on ${it.also.length} more source${it.also.length > 1 ? 's' : ''} — the article uses all of them</label><div class="also-list">${it.also.map(o => `<a href="${esc(o.url)}" target="_blank">${srcLogo(o.source, 'sm')}<div><b>${esc(o.source)}</b><span class="${mr(o.title)}">${esc(o.title)}</span></div>${icon('ext')}</a>`).join('')}</div>` : ''}
     <label class="lbl">Source Content Preview</label>
     <div class="pv-box ${mr(pv.text)}">${pv.loaded ? (pv.error ? `<span style="color:var(--danger-ink)">${esc(pv.error)}</span>` : esc(pv.text) + (pv.words ? `\n\n… ${pv.words} words in total` : '')) : '<span class="spin"></span> Loading content…'}</div>
     <div style="display:flex;gap:10px;margin-top:16px"><a class="btn" target="_blank" href="${esc(it.url)}">Open Original Article ${icon('ext')}</a>${it.article_id ? `<a class="btn primary" style="flex:1;justify-content:center" href="#/article/${it.article_id}">Open Article</a>` : `<button class="btn primary" style="flex:1;justify-content:center" data-act="pick" data-url="${esc(it.url)}">${icon(on ? 'tick' : 'plus')}${on ? 'Selected' : 'Add to Selection'}</button>`}</div>`;
@@ -394,7 +400,7 @@ ROUTES.selected = async function (first) {
       </div>
       ${list.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>#</th><th>Article title</th><th>Source</th><th>Category</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${list.map((a, i) => `<tr class="${S.asel.has(a.id) ? 'on' : ''}"><td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td><td class="row-meta">${i + 1}</td>
-        <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div><div class="t-sub ${mr(a.source.excerpt)}">${esc(a.source.excerpt || (a.has_text ? `${a.words || ''} source content extracted` : 'Source content not fetched yet'))}</div>${a.error ? `<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error)}</div>` : ''}</div></div></td>
+        <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${srcCount(a)}<div class="t-sub ${mr(a.source.excerpt)}">${esc(a.source.excerpt || (a.has_text ? `${a.words || ''} source content extracted` : 'Source content not fetched yet'))}</div>${a.error ? `<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error)}</div>` : ''}</div></div></td>
         <td><div class="tcell">${srcLogo(a.source.source, 'sm')}<span style="font-size:12.5px">${esc(a.source.source)}</span></div></td><td>${catPill(a.source.category)}</td><td class="row-meta">${fmtDate(a.source.date)}</td>
         <td>${a.status === 'error' ? badge('error') : a.has_text ? '<span class="badge b-extracted"><span class="bd"></span>Extracted</span>' : '<span class="badge b-selected"><span class="bd"></span>Selected</span>'}</td>
         <td><div class="acts"><a class="icon-btn" href="#/article/${a.id}" title="View">${icon('eye')}</a><button class="icon-btn red" data-act="one" data-a="delete" data-id="${a.id}" title="Remove">${icon('trash')}</button><button class="icon-btn" data-act="one" data-a="extract" data-id="${a.id}" title="Extract">${icon('download')}</button></div></td></tr>`).join('')}

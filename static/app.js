@@ -132,6 +132,8 @@ function thumb(a, cls = 'thumb') {
   const [bg, fg] = colorFor(a.source?.source || a.title);
   return `<div class="${cls} ph-thumb" style="background:linear-gradient(135deg,${fg},${bg})">${esc(initials(a.source?.source || 'CA'))}</div>`;
 }
+// "3 sources" badge for an article written from the same story on several websites
+const srcCount = a => a.sources?.length > 1 ? `<span class="badge b-multi" title="${esc(a.sources.join(', '))}">${icon('layers')}${a.sources.length} sources</span>` : '';
 const ring = (score, sm = false) => { const col = score >= 80 ? '#10b981' : score >= 60 ? '#f59e0b' : '#ef4444'; return `<div class="ring ${sm ? 'sm' : ''}" style="--p:${score};--ring:${col}"><div><b>${score}</b>${sm ? '' : '<span>/ 100</span>'}</div></div>`; };
 
 // ------------------------------------------------------------------ state
@@ -170,8 +172,8 @@ function updateNav() {
   const c = S.counts || {};
   const set = (id, v) => { const el = $(id); if (el) el.textContent = v || ''; };
   set('#nc-queue', c.working); set('#nc-review', c.review); set('#nc-selected', c.pending);
-  set('#nc-approved', (c.approved || 0) + (c.draft || 0));
-  set('#nc-discover', S.titles.items.filter(t => t.date === today() && !t.article_id).length);
+  if (typeof apReadyCount === 'function') set('#nc-approved', apReadyCount());
+  set('#nc-discover', S.titles.items.filter(t => !t.article_id && (!t.group || t.group === t.url) && [t.date, ...(t.also || []).map(o => o.date)].includes(today())).length);
   set('#nc-sources', S.state.sources_active);
   const wpOn = S.state.wp_ready;
   const used = S.state.storage_bytes || 0, cap = 10e9, pct = Math.min(100, Math.round(used / cap * 100));

@@ -47,6 +47,7 @@ DEFAULTS = {
     "app": {
         "auto_extract": True,        # extract right after selecting
         "duplicate_check": True,     # skip titles already used
+        "combine_sources": True,     # same story on several sources -> one article written from all of them
         "log_keep_days": 30,
         "dashboard_name": "CurrentFlow AI",
         "user_name": "Sachin",
@@ -77,7 +78,12 @@ def _deep_merge(base: dict, over: dict) -> dict:
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
-        return _deep_merge(DEFAULTS, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+        s = _deep_merge(DEFAULTS, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+        # an older UI bug saved top-level values (model, writers) as {"undefined": value}; unwrap them
+        for k, v in DEFAULTS.items():
+            if not isinstance(v, dict) and isinstance(s.get(k), dict):
+                s[k] = next(iter(s[k].values()), v)
+        return s
     return json.loads(json.dumps(DEFAULTS))
 
 

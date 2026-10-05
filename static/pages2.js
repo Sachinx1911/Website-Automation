@@ -28,7 +28,7 @@ ROUTES.review = async function (first) {
       </div>
       <div class="rv-list">${list.length ? list.map(a => `<div class="rv-item ${cur?.id === a.id ? 'on' : ''}" data-act="rv-open" data-id="${a.id}">
         <div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div>${thumb(a, 'thumb')}
-        <div class="row-main"><div class="rt ${mr(a.title)}">${esc(a.title)}</div><div class="rm">${esc(a.source.source)} · ${fmtDate(a.created)}</div><div class="rb">${catPill(a.categories[0] || a.source.category)}${badge(a.status)}</div></div></div>`).join('')
+        <div class="row-main"><div class="rt ${mr(a.title)}">${esc(a.title)}</div><div class="rm">${esc(a.source.source)} · ${fmtDate(a.created)}</div><div class="rb">${catPill(a.categories[0] || a.source.category)}${badge(a.status)}${srcCount(a)}</div></div></div>`).join('')
       : empty('check', 'Nothing to review', 'Finished articles appear here.')}</div>
     </div>
     ${cur ? reviewEditor(cur) : `<div class="card">${empty('file', 'Select an article', 'Pick an article from the list to review it.')}</div><div></div>`}
@@ -62,7 +62,7 @@ function reviewEditor(a) {
       <div class="rte mr" id="rte" contenteditable="true">${art.content_html}</div></div>
   </div>`;
   const tabs = { edit: editTab,
-    source: `<div class="editor-body"><div class="section-head"><div class="section-title">Source Content</div><a class="link" target="_blank" href="${esc(a.source.url)}">Open original ↗</a></div><div class="kv-grid" style="margin-bottom:14px"><dt>Source</dt><dd>${esc(a.source.source)}</dd><dt>Original title</dt><dd class="mr">${esc(a.source.title)}</dd><dt>Date</dt><dd>${fmtDate(a.source.date)}</dd></div><div class="src-text ${mr(a.source_text)}">${esc(a.source_text || 'Source content was not stored for this article.')}</div></div>`,
+    source: sourceTab(a),
     ai: `<div class="editor-body"><div class="section-title" style="margin-bottom:12px">AI Data</div><dl class="kv-grid"><dt>Status</dt><dd>${badge(a.status)}</dd><dt>Words</dt><dd>${a.words}</dd><dt>Reading time</dt><dd>${a.reading_min} min</dd><dt>Processing time</dt><dd>${fmtSecs(a.seconds)}</dd><dt>Started</dt><dd>${fmtDT(a.started)}</dd><dt>Finished</dt><dd>${fmtDT(a.finished)}</dd><dt>Template</dt><dd>${esc((S.templates.find(t => t.id === a.template_id) || S.templates.find(t => t.default) || {}).name || 'Default')}</dd></dl>
       <div class="section-title" style="margin:18px 0 10px">Processing log</div><div class="timeline">${(a.log || []).map(l => `<div class="tl ${l.level}"><div class="td"></div><time>${fmtTime(l.t)}</time><span>${esc(l.msg)}</span></div>`).join('')}</div></div>`,
     images: `<div class="editor-body"><div class="section-title" style="margin-bottom:12px">Featured image</div>
@@ -86,6 +86,16 @@ function reviewEditor(a) {
     <div class="card section"><div class="section-head"><div class="section-title">SEO Analysis</div><button class="link" data-act="rv-tab" data-v="seo">View Details →</button></div>
       <div class="score-wrap">${ring(seo.score)}<div class="check-list" style="flex:1">${seo.checks.slice(0, 7).map(ch => `<div class="${ch.ok ? 'ok' : 'no'}">${icon(ch.ok ? 'check' : 'alert')}<span>${esc(ch.label.split(' (')[0])}</span></div>`).join('')}</div></div></div>
   </div>`;
+}
+// every website the article was written from: the main source first, then the same story on other sources
+function sourceTab(a) {
+  const read = a.related_texts || [], unread = (a.related || []).filter(r => !read.some(t => t.url === r.url));
+  const block = (name, title, url, date, text, i) => `<div class="src-block"><div class="section-head" style="margin-bottom:8px"><div class="tcell">${srcLogo(name, 'sm')}<div><b>${read.length ? `Source ${i}: ` : ''}${esc(name)}</b><div class="row-meta ${mr(title)}">${esc(title)}${date ? ` · ${fmtDate(date)}` : ''}</div></div></div><a class="link" target="_blank" href="${esc(url)}">Open original ↗</a></div>
+    <div class="src-text ${mr(text)}">${esc(text || 'Source content was not stored for this article.')}</div></div>`;
+  return `<div class="editor-body"><div class="section-title" style="margin-bottom:12px">Source Content${read.length ? ` <span class="row-meta" style="font-weight:500">— written from ${read.length + 1} sources reporting the same news</span>` : ''}</div>
+    ${block(a.source.source, a.source.title, a.source.url, a.source.date, a.source_text, 1)}
+    ${read.map((r, i) => block(r.source, r.title, r.url, '', r.text, i + 2)).join('')}
+    ${unread.length ? `<div class="row-meta" style="margin-top:10px">Could not be read (not used): ${unread.map(r => `<a class="link" target="_blank" href="${esc(r.url)}">${esc(r.source)}</a>`).join(', ')}</div>` : ''}</div>`;
 }
 function livePreview(a) {
   const art = a.article;
@@ -285,9 +295,9 @@ ROUTES.wordpress = async function (first) {
 };
 function bindSettingsInputs() {
   $$('[data-set]').forEach(el => el.onchange = async () => {
-    const [sec, key] = el.dataset.set.split('.');
-    let v = el.value; if (key === 'author') v = v ? +v : null;
-    S.settings = await api('/api/settings', { method: 'POST', body: { [sec]: { [key]: v } } });
+    const [sec, key] = el.dataset.set.split('.');   // "publish.author" -> nested, "model" -> top level
+    let v = el.value; if (key === 'author') v = v ? +v : null; if (sec === 'writers') v = +v;
+    S.settings = await api('/api/settings', { method: 'POST', body: key ? { [sec]: { [key]: v } } : { [sec]: v } });
     toast('ok', 'Setting saved');
   });
 }
