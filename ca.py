@@ -477,7 +477,7 @@ def save_to_wp(aid: str, status: str, when: str | None = None) -> dict:
     else:
         post = wp.create_post(payload)
     new_status = {"publish": "published", "future": "scheduled", "draft": "draft"}[status]
-    meta.update(wp_id=post["id"], url=post["link"], step="", status=new_status, error="")
+    meta.update(wp_id=post["id"], url=post["link"], step="", status=new_status, error="", publish_error="")
     if status == "publish":
         meta["published_at"] = datetime.now().isoformat(timespec="seconds")
     if status == "future":

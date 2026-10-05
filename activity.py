@@ -36,12 +36,19 @@ def read(days: int = 7, limit: int = 5000) -> list[dict]:
     return out[-limit:][::-1]
 
 
+def _keep(line: str, since: str) -> bool:
+    try:
+        return json.loads(line).get("t", "") >= since
+    except (json.JSONDecodeError, AttributeError):
+        return True
+
+
 def cleanup(keep_days: int = 30) -> int:
     if not LOG_FILE.exists():
         return 0
     since = (datetime.now() - timedelta(days=keep_days)).isoformat()
-    lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
-    kept = [l for l in lines if l[6:31] >= since or '"t": "' not in l]
     with _lock:
+        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
+        kept = [l for l in lines if _keep(l, since)]
         LOG_FILE.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
     return len(lines) - len(kept)

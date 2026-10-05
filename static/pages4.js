@@ -42,7 +42,7 @@ ACTIONS['cal-nav'] = el => { let m = S.ui.calM + (+el.dataset.d), y = S.ui.calY;
 ACTIONS['cal-today'] = () => { const n = new Date(); S.ui.calM = n.getMonth(); S.ui.calY = n.getFullYear(); ROUTES.scheduling(false); };
 ACTIONS['sch-batch'] = () => {
   const approved = S.articles.filter(a => a.status === 'approved');
-  const def = new Date(Date.now() + 36e5).toISOString().slice(0, 16);
+  const def = new Date(Date.now() + 36e5 - new Date().getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
   const m = modal(`<h3>Schedule ${approved.length} approved article${approved.length > 1 ? 's' : ''}</h3><p>Posts are spread out starting from the first time, one every interval.</p>
     <div class="field-row"><div class="field"><label>First publish time</label><input class="input" type="datetime-local" id="sb-start" value="${def}"></div><div class="field"><label>Interval</label><select class="select" id="sb-gap" style="width:100%">${[[30, 'Every 30 minutes'], [60, 'Every hour'], [120, 'Every 2 hours'], [180, 'Every 3 hours'], [1440, 'One per day']].map(([v, l]) => `<option value="${v}" ${v === 120 ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
     <div class="sample">${approved.map((a, i) => `<div class="row-item"><span class="row-meta" style="width:22px">${i + 1}.</span><div class="row-main"><div class="row-title ${mr(a.title)}">${esc(a.title)}</div></div></div>`).join('')}</div>

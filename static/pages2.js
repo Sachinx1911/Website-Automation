@@ -219,7 +219,7 @@ ROUTES.published = async function (first) {
     ${slice.map((a, i) => `<tr class="clickable ${S.asel.has(a.id) ? 'on' : ''}" data-href="#/review/${a.id}"><td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td><td class="row-meta">${(page - 1) * per + i + 1}</td>
       <td>${thumb(a, 'thumb lg')}</td><td><div class="t-title wrap ${mr(a.title)}" style="max-width:360px">${esc(a.title)}</div><div>${a.tags.slice(0, 3).map(t => `<span class="tag mr">${esc(t)}</span>`).join('')}</div></td>
       <td>${catPill(a.categories[0])}</td><td class="row-meta">${fmtDate(a.published_at || a.scheduled_for || a.updated)}<br>${fmtTime(a.published_at || a.scheduled_for || a.updated)}</td><td>${ring(a.seo, true)}</td><td>${badge(a.status)}</td>
-      <td><div class="acts" onclick="event.stopPropagation()"><a class="icon-btn" href="#/review/${a.id}" title="View">${icon('eye')}</a><a class="icon-btn" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post.php?post=${a.wp_id}&action=edit" title="Edit in WordPress">${icon('edit')}</a><a class="icon-btn" target="_blank" href="${esc(a.url)}" title="Open">${icon('ext')}</a>${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish now">${icon('rocket')}</button>` : ''}</div></td></tr>`).join('')}
+      <td><div class="acts"><a class="icon-btn" href="#/review/${a.id}" title="View">${icon('eye')}</a><a class="icon-btn" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post.php?post=${a.wp_id}&action=edit" title="Edit in WordPress">${icon('edit')}</a><a class="icon-btn" target="_blank" href="${esc(a.url)}" title="Open">${icon('ext')}</a>${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish now">${icon('rocket')}</button>` : ''}</div></td></tr>`).join('')}
     </tbody></table></div>${pager(list.length, page, per, 'pub-page')}` : empty('rocket', 'Nothing published yet', 'Publish from the Review Center or WordPress page.', `<a class="btn primary" href="#/review">${icon('check')}Open Review Center</a>`)}
   </div>`, first);
   renderBulk();
@@ -252,7 +252,7 @@ ROUTES.wordpress = async function (first) {
       ${rows.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>#</th><th>Title</th><th>Category</th><th>Source</th><th>SEO</th><th>Status</th><th>Modified</th><th>Actions</th></tr></thead><tbody>
         ${rows.map((a, i) => `<tr class="clickable ${S.asel.has(a.id) ? 'on' : ''}" data-href="#/review/${a.id}"><td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td><td class="row-meta">${i + 1}</td>
           <td><div class="tcell">${thumb(a, 'thumb')}<div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div></div></td><td>${catPill(a.categories[0])}</td><td><div class="tcell">${srcLogo(a.source.source, 'sm')}<span style="font-size:12px">${esc(a.source.source)}</span></div></td><td>${ring(a.seo, true)}</td><td>${badge(a.status)}</td><td class="row-meta">${ago(a.updated)}</td>
-          <td><div class="acts" onclick="event.stopPropagation()"><a class="icon-btn" href="#/review/${a.id}">${icon('eye')}</a>${a.wp_id ? `<a class="icon-btn" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post.php?post=${a.wp_id}&action=edit">${icon('edit')}</a>` : ''}${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish">${icon('rocket')}</button><button class="icon-btn blue" data-act="wp-schedule" data-id="${a.id}" title="Schedule">${icon('calendar')}</button>` : ''}</div></td></tr>`).join('')}
+          <td><div class="acts"><a class="icon-btn" href="#/review/${a.id}">${icon('eye')}</a>${a.wp_id ? `<a class="icon-btn" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post.php?post=${a.wp_id}&action=edit">${icon('edit')}</a>` : ''}${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish">${icon('rocket')}</button><button class="icon-btn blue" data-act="wp-schedule" data-id="${a.id}" title="Schedule">${icon('calendar')}</button>` : ''}</div></td></tr>`).join('')}
       </tbody></table></div>` : empty('wp', 'No articles here', S.ui.wpTab === 'ready' ? 'Approve articles in the Review Center first.' : 'Nothing in this state yet.')}
       <div class="grid-3">
         <div class="card info-card info-blue" style="grid-column:span 2"><div class="ic">${icon('gear')}</div><div><b>SEO &amp; WordPress Optimization</b><p>Each publish sends the title, content, excerpt, slug, categories, tags${pub.featured_image ? ', featured image' : ''}${pub.rankmath_meta ? ' and Rank Math focus keyword / meta' : ''}.</p>
@@ -302,10 +302,11 @@ ACTIONS['wp-test'] = async el => { await busy(el, async () => { try { const d = 
 ACTIONS['wp-publish-approved'] = el => runBulk('publish', S.asel.size ? [...S.asel] : S.articles.filter(a => a.status === 'approved').map(a => a.id), el);
 ACTIONS['wp-schedule'] = (el, e) => {
   e.stopPropagation();
-  const id = el.dataset.id, def = new Date(Date.now() + 36e5).toISOString().slice(0, 16);
+  const id = el.dataset.id, def = new Date(Date.now() + 36e5 - new Date().getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
   const m = modal(`<h3>Schedule publication</h3><p>The post is created on WordPress with status “Scheduled” and goes live at this time (site timezone).</p><div class="field"><label>Publish at</label><input class="input" type="datetime-local" id="sch-when" value="${def}"></div><div class="mbtns"><button class="btn" data-x>Cancel</button><button class="btn primary" id="sch-ok" data-busy="Scheduling…">${icon('calendar')}Schedule</button></div>`, 'sm');
   $('[data-x]', m).onclick = closeModal;
-  $('#sch-ok', m).onclick = () => { const when = $('#sch-when', m).value; closeModal(); runBulk('schedule', [id], null, { when }); };
+  // WordPress rejects a post date without seconds ("2026-10-05T15:25"), so add them
+  $('#sch-ok', m).onclick = () => { const v = $('#sch-when', m).value; closeModal(); runBulk('schedule', [id], null, { when: v.length === 16 ? `${v}:00` : v }); };
 };
 ACTIONS['wp-connect-modal'] = async () => {
   const cfg = await api('/api/wordpress');

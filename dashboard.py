@@ -59,6 +59,11 @@ def cached(key: str, ttl: int, fn):
     return val
 
 
+def approved_at(m: dict) -> str:
+    """When the article was last approved (by a reviewer or an automation rule), taken from its log."""
+    return next((e["t"] for e in reversed(m.get("log", [])) if e.get("msg", "").startswith("Approved by")), "")
+
+
 def summary(m: dict) -> dict:
     a = m.get("article") or {}
     seo = ca.seo_score(m) if a else {"score": 0, "words": 0, "reading_min": 0, "checks": []}
@@ -74,6 +79,7 @@ def summary(m: dict) -> dict:
         "slug": a.get("slug", ""), "focus_keyword": a.get("focus_keyword", ""),
         "seo": seo["score"], "words": seo["words"], "reading_min": seo["reading_min"],
         "notes": m.get("notes", ""), "log": m.get("log", [])[-12:],
+        "approved_at": approved_at(m), "publish_error": m.get("publish_error", ""),
     }
 
 
@@ -367,7 +373,21 @@ def bulk():
             done.append(aid)
         except Exception as e:
             failed.append({"id": aid, "error": str(e)[:300]})
+            if action in ("publish", "draft", "schedule"):
+                note_publish_error(aid, str(e))
     return jsonify(done=done, failed=failed)
+
+
+def note_publish_error(aid: str, msg: str) -> None:
+    """Remember a failed WordPress publish on the article, so the Approved Articles page can list it under Failed
+    (save_to_wp clears it again on the next successful publish)."""
+    try:
+        m = ca.load(aid)
+    except FileNotFoundError:
+        return
+    m["publish_error"] = msg[:300]
+    ca.log(m, f"WordPress publish failed: {msg[:200]}", "err")
+    ca.save(m)
 
 
 @server.route("/image/<aid>")
@@ -605,8 +625,8 @@ def wp_test():
 def claude_status():
     def check():
         try:
-            out = subprocess.run(["claude", "auth", "status"], capture_output=True, text=True, timeout=30,
-                                 env=ca.app.claude_env())
+            out = subprocess.run([ca.app.claude_bin(), "auth", "status"], capture_output=True, text=True,
+                                 encoding="utf-8", timeout=30, env=ca.app.claude_env())
             info = json.loads(out.stdout)
             return {"installed": True, "logged_in": info.get("loggedIn", False), "plan": info.get("subscriptionType", "")}
         except FileNotFoundError:
@@ -645,7 +665,11 @@ def _act_extract(rule, payload):
 
 def _act_wp(status):
     def run(rule, payload):
-        m = ca.save_to_wp(payload["id"], status)
+        try:
+            m = ca.save_to_wp(payload["id"], status)
+        except Exception as e:
+            note_publish_error(payload["id"], str(e))
+            raise
         return f"{status}: {m['article']['title'][:60]}"
     return run
 
@@ -711,7 +735,7 @@ def logs_export():
     w.writerow(["time", "user", "action", "module", "details", "status"])
     for e in activity.read(int(request.args.get("days", 30))):
         w.writerow([e["t"], e["user"], e["action"], e["module"], e["details"], e["status"]])
-    return server.response_class(buf.getvalue(), mimetype="text/csv",
+    return server.response_class("﻿" + buf.getvalue(), mimetype="text/csv",  # BOM: Excel la UTF-8 (Marathi) samajte
                                  headers={"Content-Disposition": "attachment; filename=activity-logs.csv"})
 
 
@@ -775,7 +799,7 @@ def export_articles():
         w.writerow([m["id"], m["status"], a.get("title") or m["source"]["title"], m["source"].get("source"),
                     ",".join(a.get("categories", [])), m["created"], m.get("published_at", ""), m.get("url", ""),
                     ca.seo_score(m)["score"] if a else ""])
-    return server.response_class(buf.getvalue(), mimetype="text/csv",
+    return server.response_class("﻿" + buf.getvalue(), mimetype="text/csv",  # BOM: Excel la UTF-8 (Marathi) samajte
                                  headers={"Content-Disposition": "attachment; filename=articles.csv"})
 
 

@@ -52,15 +52,27 @@ def claude_env() -> dict:
                     or k in ("CLAUDECODE", "USE_STAGING_OAUTH", "USE_LOCAL_OAUTH", "CLAUDE_PID"))}
 
 
+def claude_bin() -> str:
+    """`claude` cha path. Windows var npm fakt `claude.cmd` deto, jo subprocess thetpane chalvu shakat nahi,
+    mhanun tyachya mage aslela `claude.exe` vapra."""
+    path = shutil.which("claude")
+    if path and path.lower().endswith((".cmd", ".bat")):
+        exe = Path(path).parent / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+        if exe.exists():
+            return str(exe)
+    return "claude"
+
+
 def claude_json(system: str, prompt: str, schema: dict, model: str = "") -> dict:
     """Laptop varil Claude Code (`claude -p`) kadun JSON uttar ghya. API key lagat nahi."""
-    cmd = ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
+    cmd = [claude_bin(), "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
            "--system-prompt", system, "--tools", "", "--setting-sources", "",
            "--strict-mcp-config", "--no-session-persistence"]
     if model or MODEL:
         cmd += ["--model", model or MODEL]
     try:
-        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=1200, env=claude_env())
+        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                              timeout=1200, env=claude_env())
     except subprocess.TimeoutExpired:
         raise RuntimeError("Claude Code la 20 minitanpeksha jast vel lagla. Punha prayatna kara.")
     try:

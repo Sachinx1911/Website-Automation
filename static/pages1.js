@@ -107,7 +107,7 @@ function queueTable(rows, withCheck = true) {
     <td><div class="prog-cell"><div class="progress ${pct === 100 ? 'done' : ''} ${live ? 'live' : ''}"><i style="width:${pct}%"></i></div>${pct}%</div></td>
     <td>${badge(a.status === 'writing' ? 'writing' : a.status === 'queued' ? 'queued' : a.status === 'error' ? 'error' : a.status === 'paused' ? 'paused' : 'approved').replace('Approved', 'Completed')}</td>
     <td class="row-meta">${ago(a.updated || a.created)}</td>
-    <td><div class="acts" onclick="event.stopPropagation()"><a class="icon-btn" href="#/article/${a.id}" title="View">${icon('eye')}</a>
+    <td><div class="acts"><a class="icon-btn" href="#/article/${a.id}" title="View">${icon('eye')}</a>
       ${a.status === 'queued' ? `<button class="icon-btn blue" data-act="one" data-a="pause" data-id="${a.id}" title="Pause">${icon('pause')}</button>` : ''}
       ${a.status === 'paused' ? `<button class="icon-btn blue" data-act="one" data-a="resume" data-id="${a.id}" title="Resume">${icon('play')}</button>` : ''}
       ${a.status === 'error' ? `<button class="icon-btn red" data-act="one" data-a="retry" data-id="${a.id}" title="Retry">${icon('refresh')}</button>` : ''}
@@ -285,15 +285,15 @@ ROUTES.discover = async function (first) {
   </div>
   ${Object.keys(S.titles.errors || {}).length ? `<div class="alert warn">${icon('alert')}<div>Some sources could not be read: ${Object.keys(S.titles.errors).map(esc).join(', ')}</div></div>` : ''}
   <div class="${pv ? 'grid-side' : ''}">
-    <div class="card" style="overflow:hidden">
+    <div class="card disc-card" style="overflow:hidden">
       <div class="disc-head"><div class="cb ${allSel ? 'on' : ''}" data-act="select-page">${icon('tick')}</div><div></div><div>Select All (${S.sel.size}/${items.length} selected)</div><div>Source</div><div>Date</div><div>Category</div><div></div></div>
       ${slice.length ? slice.map(i => { const used = !!i.article_id, on = S.sel.has(i.url); return `<div class="disc-row ${on ? 'on' : ''} ${used ? 'used' : ''}" data-url="${esc(i.url)}">
         <div class="cb ${on ? 'on' : used ? 'dis' : ''}" data-act="pick" data-url="${esc(i.url)}">${icon('tick')}</div>
         <div class="thumb lazy-thumb ph-thumb" data-url="${esc(i.url)}" style="width:80px;height:56px;background:linear-gradient(135deg,${colorFor(i.source)[1]},${colorFor(i.source)[0]})">${esc(initials(i.source))}</div>
-        <div style="min-width:0"><div class="dt ${mr(i.title)}" data-act="preview" data-url="${esc(i.url)}">${esc(i.title)}</div><div class="ds lazy-desc ${mr(i.excerpt)}" data-url="${esc(i.url)}">${esc(i.excerpt || '')}</div>${used ? `<span class="badge b-used" style="margin-top:4px">${i.article_id ? 'Already selected' : ''}</span>` : ''}</div>
+        <div class="dmain" style="min-width:0"><div class="dt ${mr(i.title)}" data-act="preview" data-url="${esc(i.url)}">${esc(i.title)}</div><div class="ds lazy-desc ${mr(i.excerpt)}" data-url="${esc(i.url)}">${esc(i.excerpt || '')}</div>${used ? `<span class="badge b-used" style="margin-top:4px">${i.article_id ? 'Already selected' : ''}</span>` : ''}</div>
         <div class="dsrc">${srcLogo(i.source, 'sm')}<span>${esc(i.source)}</span></div>
         <div class="row-meta">${fmtDate(i.date)}</div>
-        <div>${catPill(i.category)}</div>
+        <div class="dcat">${catPill(i.category)}</div>
         <div class="dact"><a class="btn sm" target="_blank" href="${esc(i.url)}">View Source</a>${used ? `<a class="btn sm soft" href="#/article/${i.article_id}">Open</a>` : `<button class="btn sm ${on ? 'primary' : ''}" data-act="pick" data-url="${esc(i.url)}">${icon('tick')}${on ? 'Selected' : 'Select'}</button>`}</div></div>`; }).join('')
       : `<div style="padding:20px">${empty('search', S.titles.items.length ? 'No articles match' : 'No news loaded yet', S.titles.items.length ? 'Try "All dates" or another source.' : 'Scan your sources to load today\'s titles.', `<button class="btn primary" data-act="scan" data-busy="Scanning…">${icon('refresh')}Scan sources now</button>`)}</div>`}
       <div style="padding:0 18px 14px">${pager(items.length, page, per, 'feed-page')}</div>
@@ -329,7 +329,8 @@ function lazyThumbs() {
     if (!thumbCache[url]) thumbCache[url] = api('/api/meta?url=' + encodeURIComponent(url)).catch(() => ({}));
     const m = await thumbCache[url];
     if (!el.isConnected) return;
-    if (m.image) { const img = document.createElement('img'); img.className = 'thumb'; img.style.cssText = 'width:80px;height:56px'; img.src = m.image; img.loading = 'lazy'; img.onerror = () => img.remove(); el.replaceWith(img); }
+    // swap the placeholder only once the image has loaded, so a broken image never leaves the row without its thumb cell
+    if (m.image) { const img = document.createElement('img'); img.className = 'thumb'; img.style.cssText = 'width:80px;height:56px'; img.onload = () => { if (el.isConnected) el.replaceWith(img); }; img.src = m.image; }
     const d = $(`.lazy-desc[data-url="${CSS.escape(url)}"]`);
     if (d && !d.textContent.trim() && m.description) { d.textContent = m.description; d.classList.toggle('mr', isMarathi(m.description)); }
   });

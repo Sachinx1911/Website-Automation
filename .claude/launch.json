@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["dashboard.py", "--no-browser"],
       "port": 5050
+    },
+    {
+      "name": "dashboard-windows",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-X", "utf8", "dashboard.py", "--no-browser"],
+      "port": 5050
     }
   ]
 }

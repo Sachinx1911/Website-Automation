@@ -8,6 +8,7 @@ const ICONS = {
   check: '<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   tick: '<path d="M20 6 9 17l-5-5"/>',
   'file-check': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 15l2 2 4-4"/>',
+  approved: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/>',
   wp: '<circle cx="12" cy="12" r="10"/><path d="M3.6 8.6 8.2 20.4M7.8 7.6h4.6M10 7.6l4.4 12.6L18.4 8.4M14.8 7.6h4"/>',
   news: '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>',
   spark: '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
@@ -169,6 +170,7 @@ function updateNav() {
   const c = S.counts || {};
   const set = (id, v) => { const el = $(id); if (el) el.textContent = v || ''; };
   set('#nc-queue', c.working); set('#nc-review', c.review); set('#nc-selected', c.pending);
+  set('#nc-approved', (c.approved || 0) + (c.draft || 0));
   set('#nc-discover', S.titles.items.filter(t => t.date === today() && !t.article_id).length);
   set('#nc-sources', S.state.sources_active);
   const wpOn = S.state.wp_ready;
@@ -238,7 +240,7 @@ function pager(total, page, per, act) {
   let btns = '';
   for (let p = 1; p <= pages; p++) if (pages <= 7 || Math.abs(p - page) < 3 || p === 1 || p === pages) btns += `<button class="${p === page ? 'on' : ''}" data-act="${act}" data-p="${p}">${p}</button>`;
   const scope = act.replace('-page', '');
-  return `<div class="pager"><span>Showing ${start} to ${end} of ${total}</span><div class="pages"><button data-act="${act}" data-p="${page - 1}" ${page <= 1 ? 'disabled' : ''}>‹</button>${btns}<button data-act="${act}" data-p="${page + 1}" ${page >= pages ? 'disabled' : ''}>›</button></div><div class="per">Show <select class="select" data-act="per-page" data-scope="${scope}" onchange="ACTIONS['per-page'](this)">${[10, 25, 50].map(n => `<option ${per === n ? 'selected' : ''}>${n}</option>`).join('')}</select> per page</div></div>`;
+  return `<div class="pager"><span>Showing ${start} to ${end} of ${total}</span><div class="pages"><button data-act="${act}" data-p="${page - 1}" ${page <= 1 ? 'disabled' : ''}>‹</button>${btns}<button data-act="${act}" data-p="${page + 1}" ${page >= pages ? 'disabled' : ''}>›</button></div><div class="per">Show <select class="select" data-scope="${scope}" onchange="ACTIONS['per-page'](this)">${[10, 25, 50].map(n => `<option ${per === n ? 'selected' : ''}>${n}</option>`).join('')}</select> per page</div></div>`;
 }
 
 // ------------------------------------------------------------------ router
@@ -299,7 +301,8 @@ async function runBulk(action, ids, btn, extra = {}) {
 document.addEventListener('click', async e => {
   const nav = e.target.closest('[data-href]');
   const el = e.target.closest('[data-act]');
-  if (!el && nav) { location.hash = nav.dataset.href; return; }
+  // a link or button inside a clickable row does its own thing instead of opening the row
+  if (!el && nav) { if (!e.target.closest('a, button')) location.hash = nav.dataset.href; return; }
   if (!el) { if (!e.target.closest('#notif,#bell')) $('#notif').classList.remove('show'); return; }
   const fn = ACTIONS[el.dataset.act];
   if (!fn) return;
@@ -320,7 +323,12 @@ ACTIONS.one = (el, e) => { e.stopPropagation(); return runBulk(el.dataset.a, [el
 ACTIONS['clear-sel'] = () => { S.sel.clear(); rerender(); renderBulk(); };
 ACTIONS['toggle-notif'] = () => {};
 
-$('#menu-btn').onclick = () => $('#sidebar').classList.toggle('open');
+$('#menu-btn').onclick = () => {
+  if (matchMedia('(max-width: 900px)').matches) return $('#sidebar').classList.toggle('open');
+  const collapsed = document.documentElement.classList.toggle('sb-collapsed');
+  localStorage.setItem('cf-sidebar', collapsed ? 'collapsed' : '');
+};
+if (localStorage.getItem('cf-sidebar') === 'collapsed') document.documentElement.classList.add('sb-collapsed');
 function applyTheme(mode) { document.documentElement.dataset.theme = mode; $('#theme-btn').innerHTML = icon(mode === 'dark' ? 'sun' : 'moon'); localStorage.setItem('cf-theme', mode); }
 $('#theme-btn').onclick = () => { const mode = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; applyTheme(mode); api('/api/settings', { method: 'POST', body: { app: { theme: mode } } }).catch(() => {}); };
 applyTheme(localStorage.getItem('cf-theme') || 'light');
@@ -354,7 +362,14 @@ function sortList(scope, list, getters) {
 const th = (scope, key, label) => { const st = S.ui.sort?.[scope]; const on = st?.key === key; return `<th class="sortable ${on ? 'on' : ''}" data-act="sort" data-scope="${scope}" data-key="${key}">${label}<span class="sarrow">${on ? (st.dir === 'asc' ? '▲' : '▼') : '⇅'}</span></th>`; };
 ACTIONS.sort = el => { S.ui.sort = S.ui.sort || {}; const cur = S.ui.sort[el.dataset.scope]; S.ui.sort[el.dataset.scope] = cur?.key === el.dataset.key ? { key: el.dataset.key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key: el.dataset.key, dir: 'asc' }; rerender(); };
 const perPage = scope => (S.ui.per && S.ui.per[scope]) || 10;
-ACTIONS['per-page'] = el => { S.ui.per = S.ui.per || {}; S.ui.per[el.dataset.scope] = +el.value; rerender(); };
+// called from the select's onchange only: a data-act on the select made the global click handler re-render the page
+// as soon as the dropdown was clicked, closing it before a value could be picked
+ACTIONS['per-page'] = el => {
+  const scope = el.dataset.scope;
+  S.ui.per = S.ui.per || {}; S.ui.per[scope] = +el.value;
+  if (scope === 'feed') S.feed.page = 1; else S.ui[scope + 'Page'] = 1;
+  rerender();
+};
 document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); $('#global-q').focus(); } });
 $('#bell').onclick = async () => {
   const box = $('#notif');
