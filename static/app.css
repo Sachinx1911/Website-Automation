@@ -36,7 +36,6 @@ i[data-i] svg { width: 100%; height: 100%; fill: none; stroke: currentColor; str
 .brand small { display: block; color: var(--sb-dim); font-weight: 500; margin-top: 2px; font-size: 11px; }
 .logo { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #3B82F6, #2563EB); display: grid; place-items: center; color: #fff; box-shadow: 0 8px 20px rgba(37, 99, 235, .35); }
 .logo i { width: 22px; height: 22px; }
-.nav-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--sb-dim); padding: 18px 12px 7px; font-weight: 600; }
 .nav a { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; color: var(--sb-link); text-decoration: none; font-size: 13px; font-weight: 500; margin: 2px 0; white-space: nowrap; transition: background .2s, color .2s, transform .2s var(--ease); }
 .nav a:hover { background: var(--sb-hover); color: var(--sb-strong); transform: translateX(2px); }
 .nav a.active { background: var(--primary); color: #fff; box-shadow: 0 6px 18px rgba(37, 99, 235, .4); }
@@ -54,21 +53,28 @@ i[data-i] svg { width: 100%; height: 100%; fill: none; stroke: currentColor; str
 .dot.off { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245, 158, 11, .18); }
 
 /* ---------------- topbar ---------------- */
-.main { margin-left: var(--sw); width: calc(100% - var(--sw)); min-width: 0; transition: margin-left .3s var(--ease), width .3s var(--ease); }
+.main { margin-left: var(--sw); width: calc(100% - var(--sw)); min-width: 0; }   /* slides with a transform when the sidebar changes (app.js) */
+.app { overflow-x: clip; }   /* the page sliding in never shows a sideways scrollbar */
 /* desktop: the menu button shrinks the sidebar to an icon bar (on small screens it slides in over the page instead,
    see max-width: 900px). Page names show as a tooltip; counts become small badges on the icons. */
 @media (min-width: 901px) {
   :root.sb-collapsed { --sw: 76px; }
-  .sidebar { transition: transform .3s var(--ease), width .3s var(--ease), padding .3s var(--ease); }
-  .sb-collapsed .sidebar { padding: 18px 10px; overflow-x: hidden; }
-  .sb-collapsed .brand { justify-content: center; padding: 4px 0 14px; }
-  .sb-collapsed .brand > div:last-child, .sb-collapsed .side-foot { display: none; }
-  .sb-collapsed .nav-title { font-size: 0; padding: 0; height: 1px; margin: 10px 12px; background: var(--sb-count); }
-  .sb-collapsed .nav a { font-size: 0; gap: 0; justify-content: center; padding: 11px 0; position: relative; }
+  .sidebar { overflow-x: hidden; transition: width .28s var(--ease), padding .28s var(--ease); }
+  .sb-collapsed .sidebar { padding: 18px 10px; }
+  /* everything keeps its place: words fade out and the icons slide to the middle */
+  .brand { transition: padding .28s var(--ease); }
+  .sb-collapsed .brand { padding-left: 8px; padding-right: 8px; }
+  .brand > div:last-child, .nav a .nl, .side-foot { transition: opacity .18s ease; }
+  .sb-collapsed .brand > div:last-child, .sb-collapsed .nav a .nl { opacity: 0; }
+  .sb-collapsed .side-foot { opacity: 0; visibility: hidden; transition: opacity .18s ease, visibility 0s .18s; }
+  .nav a { position: relative; transition: background .2s, color .2s, transform .2s var(--ease), padding .28s var(--ease); }
+  .sb-collapsed .nav a { padding-left: 18px; padding-right: 0; }
   .sb-collapsed .nav a:hover { transform: none; }
-  .sb-collapsed .nav a i { width: 20px; height: 20px; }
-  .sb-collapsed .nav-count { position: absolute; top: 2px; right: 4px; margin: 0; font-size: 9px; line-height: 15px; padding: 0 5px; }
+  .nav-count { transition: opacity .15s ease; }
+  .sb-collapsed .nav-count { position: absolute; left: 30px; top: 2px; margin: 0; font-size: 9px; line-height: 15px; padding: 0 5px; }
+  .sb-moving .nav-count { opacity: 0; }   /* counts move to / from the icon corner while hidden */
 }
+@media (prefers-reduced-motion: reduce) { .sidebar, .nav a, .brand, .side-foot, .nav a .nl { transition: none !important; } }
 .topbar { height: var(--hh); background: #fff; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 0 24px; position: sticky; top: 0; z-index: 20; }
 .menu { display: grid; }
 .round { width: 38px; height: 38px; border: 1px solid var(--line); background: #fff; border-radius: 10px; display: grid; place-items: center; transition: .2s; position: relative; }
@@ -847,3 +853,40 @@ th, .disc-head { color: var(--muted); }      /* table headers: same look, a litt
 @media (max-width: 1340px) { .grid-side.src-layout { grid-template-columns: 300px minmax(0, 1fr) !important; } }
 @media (max-width: 1180px) { .grid-side.src-layout { grid-template-columns: minmax(0, 1fr) !important; } }
 .src-layout > .src-panel { order: -1; }
+/* sidebar: the name next to the logo stays on one line (it wrapped while collapsing and pushed the icons down) */
+.brand > div:last-child { white-space: nowrap; }
+/* compact stat cards (KPIs), header info boxes and large buttons across the app */
+.kpis { gap: 12px; margin-bottom: 16px; }
+.kpi { padding: 12px 14px; gap: 12px; min-height: 0; align-items: center; }
+.kpi::after { width: 80px; height: 80px; right: -30px; top: -30px; }
+.kpi-icon { width: 38px; height: 38px; border-radius: 10px; }
+.kpi-icon i { width: 19px; height: 19px; }
+.kpi-value { font-size: 20px; letter-spacing: -.4px; }
+.kpi-value.sm { font-size: 16px; }
+.kpi-label { font-size: 12px; margin-top: 4px; }
+.kpi-note { font-size: 11px; margin-top: 5px; }
+.kpi.cta .btn { font-size: 14px; }
+.head-info { padding: 7px 12px; border-radius: 10px; gap: 10px; }
+.head-info b { font-size: 12.5px; }
+.head-info span { font-size: 11px; }
+.btn.lg { padding: 9px 15px; font-size: 13.5px; border-radius: 10px; }   /* standard height, like every other button */
+/* as many cards per row as fit without squeezing their text (5 on wide screens, fewer on small ones) */
+.kpis, .kpis.four { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+/* "Scan Now" etc. inside the card row: a normal button, not a button the size of a card */
+.kpi.cta { background: transparent; border: 0; box-shadow: none; padding: 0; display: flex; align-items: center; justify-content: center; }
+.kpi.cta::after { display: none; }
+.kpi.cta:hover { transform: none; box-shadow: none; }
+.kpi.cta .btn { width: auto; height: auto; padding: 9px 16px; font-size: 13.5px; border-radius: 10px; }
+
+/* sidebar status cards: compact */
+.side-foot { padding-top: 12px; gap: 6px; }
+.side-card { padding: 8px 10px; font-size: 11px; line-height: 1.4; border-radius: 10px; }
+.side-card b { font-size: 12px; margin-bottom: 1px; }
+.side-card .btn.sm { padding: 6px 10px; font-size: 12px; }
+/* collapsed sidebar: no scrollbar (it still scrolls with the wheel) so the icons are centred and badges are not cut */
+@media (min-width: 901px) {
+  .sb-collapsed .sidebar { scrollbar-width: none; }
+  .sb-collapsed .sidebar::-webkit-scrollbar { display: none; }
+  .sb-collapsed .side-foot { display: none; }
+}
+.btn.block-btn { justify-content: center; }

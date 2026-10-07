@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ v('app.css') }}">
+  <script>try { const r = document.documentElement; r.dataset.theme = localStorage.getItem('cf-theme') || 'light'; if (localStorage.getItem('cf-sidebar') === 'collapsed') r.classList.add('sb-collapsed'); } catch (e) {}</script>
 </head>
 <body>
 <div class="app">
@@ -16,9 +17,7 @@
       <div><b>CurrentFlow AI</b><small>Automate Current Affairs</small></div>
     </div>
     <nav class="nav">
-      <div class="nav-title">Dashboard</div>
       <a href="#/dashboard" data-route="dashboard"><i data-i="home"></i>Dashboard</a>
-      <div class="nav-title">Content workspace</div>
       <a href="#/sources" data-route="sources"><i data-i="bank"></i>Sources<span class="nav-count" id="nc-sources"></span></a>
       <a href="#/discover" data-route="discover"><i data-i="search"></i>Discover Articles<span class="nav-count" id="nc-discover"></span></a>
       <a href="#/selected" data-route="selected"><i data-i="file-check"></i>Selected Articles<span class="nav-count" id="nc-selected"></span></a>
@@ -26,15 +25,12 @@
       <a href="#/review" data-route="review"><i data-i="check"></i>Review Center<span class="nav-count" id="nc-review"></span></a>
       <a href="#/approved" data-route="approved"><i data-i="approved"></i>Approved Articles<span class="nav-count" id="nc-approved"></span></a>
       <a href="#/published" data-route="published"><i data-i="news"></i>Published Articles</a>
-      <div class="nav-title">Publishing</div>
       <a href="#/wordpress" data-route="wordpress"><i data-i="wp"></i>Websites &amp; Publishing</a>
       <a href="#/scheduling" data-route="scheduling"><i data-i="calendar"></i>Article Scheduling</a>
-      <div class="nav-title">AI &amp; automation</div>
       <a href="#/claude" data-route="claude"><i data-i="spark"></i>Claude Configuration</a>
       <a href="#/seo" data-route="seo"><i data-i="globe"></i>SEO Configuration</a>
       <a href="#/automation" data-route="automation"><i data-i="bolt"></i>Automation Rules<span class="nav-count" id="nc-rules"></span></a>
       <a href="#/logs" data-route="logs"><i data-i="list"></i>Activity Logs</a>
-      <div class="nav-title">System</div>
       <a href="#/settings" data-route="settings"><i data-i="gear"></i>Settings</a>
     </nav>
     <div class="side-foot" id="side-foot"></div>

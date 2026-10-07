@@ -454,9 +454,9 @@ ROUTES.selected = async function (first) {
         <div class="step-v"><div class="n">4</div><div><b>Publish to WordPress</b><span>Manually publish approved articles</span></div></div>
       </div>
       <div style="display:grid;gap:10px;margin-top:16px">
-        <button class="btn primary tall" data-act="sel-run" data-a="extract" data-busy="Extracting…" ${pend.length ? '' : 'disabled'}><span>${icon('download')} Extract Selected Articles</span><small>Fetch full content from source websites</small></button>
-        <button class="btn violet tall" data-act="sel-run" data-a="process" ${pend.length ? '' : 'disabled'}><span>${icon('brain')} Process with Claude AI</span><small>Generate SEO articles (extracts first if needed)</small></button>
-        <a class="btn soft tall" href="#/queue"><span>${icon('play')} Move to Processing Queue</span><small>See articles that are being written</small></a>
+        <button class="btn primary block-btn" title="Fetch full content from source websites" data-act="sel-run" data-a="extract" data-busy="Extracting…" ${pend.length ? '' : 'disabled'}>${icon('download')}Extract Selected Articles</button>
+        <button class="btn violet block-btn" title="Generate SEO articles (extracts first if needed)" data-act="sel-run" data-a="process" ${pend.length ? '' : 'disabled'}>${icon('brain')}Process with Claude AI</button>
+        <a class="btn soft block-btn" title="See articles that are being written" href="#/queue">${icon('play')}Move to Processing Queue</a>
       </div>
     </div>
   </div>`, first);

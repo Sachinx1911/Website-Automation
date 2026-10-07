@@ -88,7 +88,15 @@ async function api(path, { method = 'GET', body, site } = {}) {
   const opts = { method, headers: { 'X-Website': (site !== undefined ? site : S.site) || 'all' } };
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers['Content-Type'] = 'application/json'; }
-  const r = await fetch(path, opts);
+  let r;
+  for (let attempt = 0; ; attempt++) {   // a read that hits a brief server / network hiccup is tried once more
+    try { r = await fetch(path, opts); } catch (e) {
+      if (method === 'GET' && !attempt) { await new Promise(x => setTimeout(x, 400)); continue; }
+      throw new Error('Cannot reach the dashboard server. Is it still running?');
+    }
+    if (r.status >= 500 && method === 'GET' && !attempt) { await new Promise(x => setTimeout(x, 400)); continue; }
+    break;
+  }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
   return data;
@@ -237,6 +245,8 @@ async function busy(btn, fn) {
 // ------------------------------------------------------------------ page building blocks
 const ROUTES = {}, ACTIONS = {};
 function paint(html, animate) {
+  clearTimeout(S._skel);
+  if (S._toTop) { window.scrollTo(0, 0); S._toTop = false; }   // first paint of a new page starts at the top
   const y = window.scrollY;
   view.classList.toggle('no-anim', !animate);   // a refresh must not replay the entrance animations (flicker)
   view.innerHTML = html; hydrate(view);
@@ -274,9 +284,12 @@ async function go() {
   $$('.nav a').forEach(a => a.classList.toggle('active', a.dataset.route === S.route || (S.route === 'article' && a.dataset.route === 'review')));
   $('#sidebar').classList.remove('open'); $('#notif').classList.remove('show');
   renderBulk();
-  view.innerHTML = `<div class="skel" style="width:40%;height:34px"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div>`;
-  window.scrollTo(0, 0);
-  try { await ROUTES[S.route](true); } catch (e) { console.error(e); view.innerHTML = errorBox(e.message); }
+  S._toTop = true;
+  clearTimeout(S._skel);   // a fast page replaces the old one directly; only a slow one shows the loading skeleton
+  S._skel = setTimeout(() => { view.innerHTML = `<div class="skel" style="width:40%;height:34px"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div>`; window.scrollTo(0, 0); S._toTop = false; }, 160);
+  try { await ROUTES[S.route](true); } catch (e) { console.error(e); clearTimeout(S._skel); view.innerHTML = errorBox(e.message); }
+  clearTimeout(S._skel);
+  if (S._toTop) { window.scrollTo(0, 0); S._toTop = false; }
 }
 window.addEventListener('hashchange', go);
 const rerender = () => ROUTES[S.route] && ROUTES[S.route](false);
@@ -432,12 +445,24 @@ ACTIONS['site-add'] = () => { $('#site-switch')?.classList.remove('open'); ACTIO
 
 $('#menu-btn').onclick = () => {
   if (matchMedia('(max-width: 900px)').matches) return $('#sidebar').classList.toggle('open');
-  const collapsed = document.documentElement.classList.toggle('sb-collapsed');
-  localStorage.setItem('cf-sidebar', collapsed ? 'collapsed' : '');
+  const root = document.documentElement, main = $('.main'), x0 = main.getBoundingClientRect().left;
+  root.classList.add('sb-moving');
+  const collapsed = root.classList.toggle('sb-collapsed');
+  try { localStorage.setItem('cf-sidebar', collapsed ? 'collapsed' : ''); } catch {}
+  // the page takes its new width at once and slides there with a transform: smooth, no re-layout on every frame
+  const dx = x0 - main.getBoundingClientRect().left;
+  if (dx && !matchMedia('(prefers-reduced-motion: reduce)').matches)
+    main.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2, .8, .2, 1)' });
+  clearTimeout(S._sbMove); S._sbMove = setTimeout(() => root.classList.remove('sb-moving'), 320);
 };
 if (localStorage.getItem('cf-sidebar') === 'collapsed') document.documentElement.classList.add('sb-collapsed');
-// the page name as a tooltip (the collapsed sidebar shows only the icons)
-$$('.nav a').forEach(a => { a.title = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim(); });
+// the page name as a tooltip (the collapsed sidebar shows only the icons); the label in a span so it can fade
+$$('.nav a').forEach(a => {
+  const t = [...a.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+  if (!t) return;
+  a.title = t.textContent.trim();
+  const span = document.createElement('span'); span.className = 'nl'; span.textContent = t.textContent; t.replaceWith(span);
+});
 function applyTheme(mode) { document.documentElement.dataset.theme = mode; $('#theme-btn').innerHTML = icon(mode === 'dark' ? 'sun' : 'moon'); localStorage.setItem('cf-theme', mode); }
 $('#theme-btn').onclick = () => { const mode = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; applyTheme(mode); api('/api/settings', { method: 'POST', body: { app: { theme: mode } } }).catch(() => {}); };
 applyTheme(localStorage.getItem('cf-theme') || 'light');
