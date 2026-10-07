@@ -22,6 +22,7 @@ ROUTES.dashboard = async function (first) {
     <div><h1>${greet}, ${esc((S.state.user_name || 'Admin').split(' ')[0])}! 👋</h1><div class="subtitle">Here's what's happening with your current affairs content today.</div></div>
     <div class="head-right" style="text-align:right;display:block"><b style="font-size:14px">${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</b><div class="subtitle" style="font-size:12.5px">Last updated: ${ago(st.fetched_at)}</div></div>
   </div>
+  ${S.claude && S.claude.installed !== false && !S.claude.logged_in ? `<div class="alert warn">${icon('alert')}<div style="flex:1"><b>Claude is not logged in on this laptop.</b> Articles cannot be written until you log in (one time — it stays logged in after that).</div><button class="btn sm primary" data-act="claude-login" data-busy="Opening…">${icon('key')}Log in to Claude</button></div>` : ''}
   <div class="kpis stagger">
     ${kpi({ href: '#/sources', g: 'blue', ic: 'db', val: st.sources_active || 0, label: 'Active Sources', note: `${st.sources_total} configured · ${st.sources_errors || 0} errors`, trend: st.sources_errors ? 'down' : '' })}
     ${kpi({ href: '#/discover', g: 'green', ic: 'file', val: st.titles_today || 0, label: 'New Articles Today', ...tNew })}

@@ -649,21 +649,153 @@ def wp_test():
 
 # ---------------------------------------------------------------- Claude
 
+def _claude_check() -> dict:
+    try:
+        out = subprocess.run([ca.app.claude_bin(), "auth", "status"], capture_output=True, text=True,
+                             encoding="utf-8", timeout=30, env=ca.app.claude_env())
+        info = json.loads(out.stdout)
+        return {"installed": True, "logged_in": info.get("loggedIn", False), "plan": info.get("subscriptionType", "")}
+    except FileNotFoundError:
+        return {"installed": False, "logged_in": False}
+    except Exception as e:
+        return {"installed": True, "logged_in": False, "error": str(e)[:200]}
+
+
 @server.get("/api/claude/status")
 def claude_status():
-    def check():
-        try:
-            out = subprocess.run([ca.app.claude_bin(), "auth", "status"], capture_output=True, text=True,
-                                 encoding="utf-8", timeout=30, env=ca.app.claude_env())
-            info = json.loads(out.stdout)
-            return {"installed": True, "logged_in": info.get("loggedIn", False), "plan": info.get("subscriptionType", "")}
-        except FileNotFoundError:
-            return {"installed": False, "logged_in": False}
-        except Exception as e:
-            return {"installed": True, "logged_in": False, "error": str(e)[:200]}
     if request.args.get("fresh"):
         _cache.pop("claude", None)
-    return jsonify(cached("claude", 300, check))
+    return jsonify(cached("claude", 300, _claude_check))
+
+
+# Log in to Claude Code from the dashboard. `claude auth login` opens the sign-in page in the browser and then
+# waits for the code that page shows; the dashboard keeps the process running and passes the pasted code to it.
+_login: dict = {"proc": None, "out": ""}
+_login_lock = threading.Lock()
+
+
+def _login_stop() -> None:
+    p = _login.get("proc")
+    if p and p.poll() is None:
+        p.kill()
+    _login.update(proc=None, out="")
+
+
+def _login_read(proc) -> None:
+    for ch in iter(lambda: proc.stdout.read(1), ""):
+        _login["out"] += ch
+
+
+def _no_browser() -> str:
+    """A browser command that does nothing: Claude Code opens the page through $BROWSER, and the dashboard opens
+    it itself (on claude.ai), so only one tab appears."""
+    if os.name != "nt":
+        return "true"
+    bat = ca.CACHE_DIR / "no-browser.bat"
+    if not bat.exists():
+        bat.parent.mkdir(exist_ok=True)
+        bat.write_text("@exit /b 0\r\n", encoding="ascii")
+    return str(bat)
+
+
+@server.post("/api/claude/login/start")
+def claude_login_start():
+    with _login_lock:
+        _login_stop()
+        env = ca.app.claude_env() | {"BROWSER": _no_browser()}
+        try:
+            proc = subprocess.Popen([ca.app.claude_bin(), "auth", "login"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=env)
+        except FileNotFoundError:
+            return error("Claude Code is not installed on this laptop.")
+        _login.update(proc=proc, out="")
+        threading.Thread(target=_login_read, args=(proc,), daemon=True).start()
+        for _ in range(80):   # the sign-in link appears within a second or two
+            m = re.search(r"https://\S+/oauth/authorize\S+", _login["out"])
+            if m:
+                # claude.com/cai/oauth/authorize only forwards (same parameters) to claude.ai, where the browser is
+                # already logged in, so go there directly
+                url = re.sub(r"^https://claude\.com/cai/oauth/authorize", "https://claude.ai/oauth/authorize", m.group(0))
+                _login["url"] = url
+                webbrowser.open(url)
+                activity.log("Claude login started", "System")
+                return jsonify(url=url)
+            if proc.poll() is not None:
+                break
+            time.sleep(0.25)
+        out = _login["out"].strip()
+        _login_stop()
+        return error(f"Claude Code did not start the sign-in. {out[-300:]}".strip())
+
+
+@server.post("/api/claude/login/code")
+def claude_login_code():
+    code = ((request.json or {}).get("code") or "").strip()
+    if not code:
+        return error("Paste the code shown on the Claude page after you click Authorize.")
+    with _login_lock:
+        proc = _login.get("proc")
+        if not proc or proc.poll() is not None:
+            return error("This sign-in has expired. Click “Log in to Claude” again.")
+        before = len(_login["out"])
+        proc.stdin.write(code + "\n")
+        proc.stdin.flush()
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            pass
+        reply = _login["out"][before:].strip()
+        _login_stop()
+    _cache.pop("claude", None)
+    status = cached("claude", 300, _claude_check)
+    if status.get("logged_in"):
+        activity.log("Claude logged in", "System", status.get("plan", ""))
+        return jsonify(status)
+    activity.log("Claude login failed", "System", reply[-200:], "failed")
+    return error(f"Login did not complete. {reply[-300:] or 'Try again with a fresh code.'}".strip())
+
+
+@server.post("/api/claude/login/open")
+def claude_login_open():
+    """Open the sign-in page in the laptop's default browser (where claude.ai is usually logged in, so the page
+    shows the account with an Authorize button) instead of inside whatever window shows the dashboard."""
+    url = _login.get("url")
+    proc = _login.get("proc")
+    if not url or not proc or proc.poll() is not None:
+        return error("This sign-in has expired. Click “Log in to Claude” again.")
+    webbrowser.open(url)
+    return jsonify(ok=True)
+
+
+@server.get("/api/claude/login/poll")
+def claude_login_poll():
+    """While the login window is open: did the sign-in finish on its own (no code needed)?"""
+    proc = _login.get("proc")
+    if proc and proc.poll() is None:
+        return jsonify(done=False, running=True)
+    _cache.pop("claude", None)
+    status = cached("claude", 300, _claude_check)
+    if status.get("logged_in") and proc:
+        with _login_lock:
+            _login_stop()
+        activity.log("Claude logged in", "System", status.get("plan", ""))
+    return jsonify(done=bool(status.get("logged_in")), running=False, **status)
+
+
+@server.post("/api/claude/login/cancel")
+def claude_login_cancel():
+    with _login_lock:
+        _login_stop()
+    return jsonify(ok=True)
+
+
+@server.post("/api/claude/logout")
+def claude_logout():
+    subprocess.run([ca.app.claude_bin(), "auth", "logout"], capture_output=True, text=True, encoding="utf-8",
+                   timeout=60, env=ca.app.claude_env())
+    _cache.pop("claude", None)
+    activity.log("Claude logged out", "System")
+    return jsonify(cached("claude", 300, _claude_check))
 
 
 # ---------------------------------------------------------------- automation rules

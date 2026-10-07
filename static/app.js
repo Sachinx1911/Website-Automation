@@ -178,7 +178,9 @@ function updateNav() {
   const wpOn = S.state.wp_ready;
   const used = S.state.storage_bytes || 0, cap = 10e9, pct = Math.min(100, Math.round(used / cap * 100));
   const plan = S.claude?.plan || S.state.claude_plan || '';
-  $('#side-foot').innerHTML = `<div class="side-card"><b><span class="dot ${wpOn ? 'on' : 'off'}"></span>${wpOn ? 'WordPress connected' : 'WordPress not connected'}</b>${wpOn ? esc((S.state.wp_url || '').replace(/^https?:\/\//, '')) : '<a class="link" href="#/wordpress" style="color:#93c5fd">Connect now →</a>'}</div>`;
+  const cl = S.claude;
+  $('#side-foot').innerHTML = `<div class="side-card"><b><span class="dot ${wpOn ? 'on' : 'off'}"></span>${wpOn ? 'WordPress connected' : 'WordPress not connected'}</b>${wpOn ? esc((S.state.wp_url || '').replace(/^https?:\/\//, '')) : '<a class="link" href="#/wordpress" style="color:#93c5fd">Connect now →</a>'}</div>`
+    + (cl ? `<div class="side-card"><b><span class="dot ${cl.logged_in ? 'on' : 'off'}"></span>${cl.logged_in ? 'Claude logged in' : 'Claude not logged in'}</b>${cl.logged_in ? esc(cl.plan ? `${cl.plan} plan` : 'Ready to write') : `<button class="btn sm primary block" data-act="claude-login" data-busy="Opening…" style="margin-top:8px">${icon('key')}Log in to Claude</button>`}</div>` : '');
   hydrate($('#side-foot'));
   const name = S.state.user_name || 'Admin';
   $('#who-name').textContent = name; $('#who-avatar').textContent = initials(name);
@@ -299,6 +301,57 @@ async function runBulk(action, ids, btn, extra = {}) {
   return r;
 }
 
+// ------------------------------------------------------------------ Claude login
+// `claude auth login` runs on the server: it opens the Claude sign-in page in the browser, and the code that page
+// shows after "Authorize" is pasted here and handed to it.
+ACTIONS['claude-login'] = async el => {
+  let url;
+  try { ({ url } = await busy(el, () => api('/api/claude/login/start', { method: 'POST' }))); }
+  catch (e) { return toast('err', 'Could not start the Claude login', e.message); }
+  // opened by the server in the laptop's default browser, where claude.ai is normally logged in already, so the page
+  // shows that account with an Authorize button (a link here would open inside the window showing the dashboard)
+  const openPage = () => api('/api/claude/login/open', { method: 'POST' }).catch(e => toast('err', 'Could not open the browser', e.message));
+  const m = modal(`<h3>Log in to Claude</h3>
+    <div class="steps-v">
+      <div class="step-v"><div class="n">1</div><div><b>Claude page opens in your browser</b><span>Your logged-in Claude account is shown there. <button class="link" id="cl-open" style="background:none;border:0;padding:0">Open it again</button> · <button class="link" id="cl-copy" style="background:none;border:0;padding:0">Copy link</button> (for another browser)</span></div></div>
+      <div class="step-v"><div class="n">2</div><div><b>Click “Authorize”</b><span>Not logged in there? Sign in to claude.ai once in that browser first.</span></div></div>
+      <div class="step-v"><div class="n">3</div><div><b>Copy the code and paste it below</b><span>Claude shows a code after you authorize.</span></div></div>
+    </div>
+    <div class="field" style="margin-top:14px"><label>Code from the Claude page</label><input class="input" id="cl-code" placeholder="Paste the code here" autocomplete="off" spellcheck="false"></div>
+    <div id="cl-result"></div>
+    <div class="mbtns"><button class="btn" id="cl-cancel">Cancel</button><button class="btn primary" id="cl-ok" data-busy="Logging in…">${icon('key')}Finish login</button></div>`, 'sm');
+  let finished = false;
+  const done = st => { if (finished) return; finished = true; clearInterval(S._clPoll); S.claude = st; closeModal(); toast('ok', 'Claude logged in', st.plan ? `${st.plan} plan` : ''); updateNav(); rerender(); };
+  // if the sign-in completes on its own after "Authorize", close without needing the code
+  clearInterval(S._clPoll);
+  S._clPoll = setInterval(async () => {
+    if (!m.isConnected) return clearInterval(S._clPoll);
+    try { const st = await api('/api/claude/login/poll'); if (st.done) done(st); } catch {}
+  }, 2500);
+  $('#cl-cancel', m).onclick = () => { clearInterval(S._clPoll); api('/api/claude/login/cancel', { method: 'POST' }).catch(() => {}); closeModal(); };
+  $('#cl-open', m).onclick = openPage;   // Claude Code itself opens the page once; this is only for "open it again"
+  $('#cl-copy', m).onclick = async () => { try { await navigator.clipboard.writeText(url); toast('ok', 'Link copied', 'Paste it in the browser where you are logged in to Claude'); } catch { prompt('Copy this link', url); } };
+  const finish = () => busy($('#cl-ok', m), async () => {
+    try {
+      clearInterval(S._clPoll);
+      done(await api('/api/claude/login/code', { method: 'POST', body: { code: $('#cl-code', m).value } }));
+    } catch (e) {
+      // the CLI stops after a wrong code, so the next try needs a fresh sign-in
+      $('#cl-result', m).innerHTML = `<div class="alert err" style="margin:0 0 12px">${icon('alert')}<div>${esc(e.message)}<br><button class="link" data-act="claude-login" style="background:none;border:0;padding:0;margin-top:6px">Start again →</button></div></div>`;
+      hydrate($('#cl-result', m));
+    }
+  });
+  $('#cl-ok', m).onclick = finish;
+  $('#cl-code', m).onkeydown = e => { if (e.key === 'Enter') finish(); };
+  $('#cl-code', m).focus();
+};
+ACTIONS['claude-logout'] = async () => {
+  if (!await confirmBox({ title: 'Log out of Claude?', text: 'Articles cannot be written until you log in again.', ok: 'Log out', kind: 'danger-solid' })) return;
+  try { S.claude = await api('/api/claude/logout', { method: 'POST' }); toast('ok', 'Logged out of Claude'); }
+  catch (e) { toast('err', 'Logout failed', e.message); }
+  updateNav(); rerender();
+};
+
 // ------------------------------------------------------------------ global events
 document.addEventListener('click', async e => {
   const nav = e.target.closest('[data-href]');
@@ -396,7 +449,7 @@ setInterval(async () => { try { const d = await api('/api/notifications'); const
 // ------------------------------------------------------------------ boot
 window.addEventListener('load', async () => {
   hydrate();
-  await Promise.all([loadState(), loadTitles(), loadArticles(), loadWp()]).catch(() => {});
+  await Promise.all([loadState(), loadTitles(), loadArticles(), loadWp(), loadClaude()]).catch(() => {});
   updateNav();
   go();
 });
