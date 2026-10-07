@@ -890,3 +890,4 @@ th, .disc-head { color: var(--muted); }      /* table headers: same look, a litt
   .sb-collapsed .side-foot { display: none; }
 }
 .btn.block-btn { justify-content: center; }
+.logo { flex: none; }   /* never squeezed into an oval when the sidebar is narrow */
