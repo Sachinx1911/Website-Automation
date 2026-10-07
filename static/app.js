@@ -83,10 +83,11 @@ const mr = s => isMarathi(s) ? 'mr' : '';
 const fmtBytes = b => b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' KB';
 const fmtSecs = s => !s ? '—' : s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 
-async function api(path, { method = 'GET', body } = {}) {
-  const opts = { method };
+async function api(path, { method = 'GET', body, site } = {}) {
+  // the selected website (or `site` for a call about one specific website); the server checks it
+  const opts = { method, headers: { 'X-Website': (site !== undefined ? site : S.site) || 'all' } };
   if (body instanceof FormData) opts.body = body;
-  else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers = { 'Content-Type': 'application/json' }; }
+  else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers['Content-Type'] = 'application/json'; }
   const r = await fetch(path, opts);
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
@@ -138,6 +139,7 @@ const ring = (score, sm = false) => { const col = score >= 80 ? '#10b981' : scor
 
 // ------------------------------------------------------------------ state
 const S = {
+  site: (() => { try { return localStorage.getItem('cf-site'); } catch { return null; } })(), websites: [],   // null = not chosen yet
   state: {}, titles: { items: [], errors: {}, stats: {} }, articles: [], counts: {}, sources: [], wp: null, claude: null,
   settings: null, templates: [], sel: new Map(), asel: new Set(), route: 'dashboard', param: null, lastStatus: {}, current: null,
   feed: { q: '', src: '', cat: '', when: 'today', page: 1, sort: 'latest', preview: null },
@@ -148,6 +150,21 @@ const isWorking = a => ['queued', 'writing'].includes(a.status);
 const inReview = a => ['ready', 'changes', 'approved', 'rejected', 'draft', 'scheduled'].includes(a.status);
 
 async function loadState() { S.state = await api('/api/state'); }
+async function loadWebsites() {
+  const d = await api('/api/websites', { site: 'all' });
+  S.websites = d.items; S.defaultSite = d.default;
+  // first visit, or a stored website that no longer exists: the only website, else All Websites
+  if (S.site === null || (S.site && !S.websites.some(w => w.id === S.site))) S.site = S.websites.length === 1 ? S.websites[0].id : '';
+  try { localStorage.setItem('cf-site', S.site); } catch {}
+  renderSiteSwitch();
+}
+const siteById = id => S.websites.find(w => w.id === id);
+const curSite = () => siteById(S.site);
+// the WordPress address of the website an article belongs to (not of the selected one)
+const siteUrlOf = a => { const w = siteById(a?.website_id); return (w?.wp?.url || w?.url || S.state.wp_url || '').replace(/\/$/, ''); };
+// in All Websites mode, rows show which website an article belongs to
+const siteChip = a => { if (S.site) return ''; const w = siteById(a.website_id); return w ? `<span class="site-chip" title="${esc(w.url || '')}">${icon('globe')}${esc(w.name)}</span>` : ''; };
+const ctxChip = () => { const w = curSite(); return `<div class="ctx-chip ${w ? '' : 'all'}">${icon('globe')}${w ? `Website: <b>${esc(w.name)}</b>${w.niche ? `<span>· ${esc(w.niche)}</span>` : ''}` : '<b>All Websites</b><span>· combined view</span>'}</div>`; };
 async function loadTitles() { S.titles = await api('/api/titles'); }
 async function loadSources() { const d = await api('/api/sources'); S.sources = d.items; S.sourceCats = d.categories; }
 async function loadWp() { S.wp = await api('/api/wordpress').catch(() => ({ connected: false })); }
@@ -171,15 +188,17 @@ async function loadArticles() {
 function updateNav() {
   const c = S.counts || {};
   const set = (id, v) => { const el = $(id); if (el) el.textContent = v || ''; };
-  set('#nc-queue', c.working); set('#nc-review', c.review); set('#nc-selected', c.pending);
+  set('#nc-queue', c.working); set('#nc-review', (c.ready || 0) + (c.changes || 0) + (c.draft || 0)); set('#nc-selected', c.pending);
   if (typeof apReadyCount === 'function') set('#nc-approved', apReadyCount());
   set('#nc-discover', S.titles.items.filter(t => !t.article_id && (!t.group || t.group === t.url) && [t.date, ...(t.also || []).map(o => o.date)].includes(today())).length);
   set('#nc-sources', S.state.sources_active);
-  const wpOn = S.state.wp_ready;
+  const wpOn = S.state.wp_ready, nSites = S.websites.length, nOn = S.websites.filter(w => w.connected).length;
   const used = S.state.storage_bytes || 0, cap = 10e9, pct = Math.min(100, Math.round(used / cap * 100));
   const plan = S.claude?.plan || S.state.claude_plan || '';
   const cl = S.claude;
-  $('#side-foot').innerHTML = `<div class="side-card"><b><span class="dot ${wpOn ? 'on' : 'off'}"></span>${wpOn ? 'WordPress connected' : 'WordPress not connected'}</b>${wpOn ? esc((S.state.wp_url || '').replace(/^https?:\/\//, '')) : '<a class="link" href="#/wordpress" style="color:#93c5fd">Connect now →</a>'}</div>`
+  $('#side-foot').innerHTML = (!S.site && nSites > 1
+      ? `<div class="side-card"><b><span class="dot ${nOn === nSites ? 'on' : 'off'}"></span>${nSites} websites</b>${nOn} connected to WordPress</div>`
+      : `<div class="side-card"><b><span class="dot ${wpOn ? 'on' : 'off'}"></span>${wpOn ? 'WordPress connected' : 'WordPress not connected'}</b>${wpOn ? esc((S.state.wp_url || '').replace(/^https?:\/\//, '')) : '<a class="link" href="#/wordpress" style="color:#93c5fd">Connect now →</a>'}</div>`)
     + (cl ? `<div class="side-card"><b><span class="dot ${cl.logged_in ? 'on' : 'off'}"></span>${cl.logged_in ? 'Claude logged in' : 'Claude not logged in'}</b>${cl.logged_in ? esc(cl.plan ? `${cl.plan} plan` : 'Ready to write') : `<button class="btn sm primary block" data-act="claude-login" data-busy="Opening…" style="margin-top:8px">${icon('key')}Log in to Claude</button>`}</div>` : '');
   hydrate($('#side-foot'));
   const name = S.state.user_name || 'Admin';
@@ -202,7 +221,7 @@ function modal(html, cls = '') {
 }
 function closeModal() { $('#modal').classList.remove('show'); $('#modal').innerHTML = ''; }
 $('#modal').addEventListener('mousedown', e => { if (e.target.id === 'modal') closeModal(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); $('#notif').classList.remove('show'); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); $('#notif').classList.remove('show'); $('#site-switch')?.classList.remove('open'); } });
 function confirmBox({ title, text, ok = 'Confirm', kind = 'primary' }) {
   return new Promise(resolve => {
     const m = modal(`<h3>${esc(title)}</h3><p>${text}</p><div class="mbtns"><button class="btn" data-x="0">Cancel</button><button class="btn ${kind}" data-x="1">${esc(ok)}</button></div>`, 'sm');
@@ -219,6 +238,7 @@ async function busy(btn, fn) {
 const ROUTES = {}, ACTIONS = {};
 function paint(html, animate) {
   const y = window.scrollY;
+  view.classList.toggle('no-anim', !animate);   // a refresh must not replay the entrance animations (flicker)
   view.innerHTML = html; hydrate(view);
   if (animate) { view.classList.remove('fade-up'); void view.offsetWidth; view.classList.add('fade-up'); }
   else window.scrollTo(0, y);
@@ -226,7 +246,7 @@ function paint(html, animate) {
 const errorBox = msg => `<div class="alert err">${icon('alert')}<div><b>Something went wrong</b><br>${esc(msg)}</div></div>`;
 const empty = (ic, title, text, action = '') => `<div class="empty"><div class="ico">${icon(ic)}</div><h3>${title}</h3><p>${text}</p>${action}</div>`;
 const crumbs = (...parts) => `<div class="crumbs"><a href="#/dashboard">Home</a>${parts.map(p => ` › ${esc(p)}`).join('')}</div>`;
-const pageHead = ({ crumb, icon: ic, color, title, sub, right = '' }) => `${crumb ? crumbs(crumb) : ''}<div class="page-head"><div class="ph-left">${ic ? `<div class="ph-icon ${color}">${icon(ic)}</div>` : ''}<div><h1>${title}</h1><div class="subtitle">${sub}</div></div></div><div class="head-right">${right}</div></div>`;
+const pageHead = ({ crumb, icon: ic, color, title, sub, right = '' }) => `${crumb ? crumbs(crumb) : ''}<div class="page-head"><div class="ph-left">${ic ? `<div class="ph-icon ${color}">${icon(ic)}</div>` : ''}<div><h1>${title}</h1><div class="subtitle">${sub}</div>${ctxChip()}</div></div><div class="head-right">${right}</div></div>`;
 function kpi({ href, g, ic, val, label, note = '', trend = '', small = false }) {
   const t = trend === 'up' ? 'up' : trend === 'down' ? 'down' : '';
   const tag = href ? 'a' : 'div';
@@ -266,7 +286,7 @@ function renderBulk() {
   const bar = $('#bulkbar');
   let html = '';
   if (S.route === 'discover' && S.sel.size) {
-    html = `<span class="cnt"><b>${S.sel.size}</b>selected</span><button class="btn" data-act="clear-sel">Clear</button><button class="btn primary" data-act="add-selection" data-busy="Adding…">${icon('file-check')}Add ${S.sel.size} to Selected Articles</button><button class="btn violet" data-act="add-selection" data-process="1" data-busy="Starting…">${icon('spark')}Process with Claude now</button>`;
+    html = `<span class="cnt"><b>${S.sel.size}</b>selected</span><button class="btn" data-act="clear-sel">Clear</button><button class="btn danger" data-act="feed-del-sel">${icon('trash')}Delete</button><button class="btn primary" data-act="add-selection" data-busy="Adding…">${icon('file-check')}Add ${S.sel.size} to Selected Articles</button><button class="btn violet" data-act="add-selection" data-process="1" data-busy="Starting…">${icon('spark')}Process with Claude now</button>`;
   } else if (S.route === 'selected' && S.asel.size) {
     html = `<span class="cnt"><b>${S.asel.size}</b>selected</span><button class="btn danger" data-act="bulk" data-a="delete">${icon('trash')}Remove</button><button class="btn" data-act="bulk" data-a="extract" data-busy="Extracting…">${icon('download')}Extract</button><button class="btn violet" data-act="bulk" data-a="process">${icon('spark')}Process with Claude</button>`;
   } else if (S.route === 'queue' && S.asel.size) {
@@ -378,12 +398,46 @@ ACTIONS.one = (el, e) => { e.stopPropagation(); return runBulk(el.dataset.a, [el
 ACTIONS['clear-sel'] = () => { S.sel.clear(); rerender(); renderBulk(); };
 ACTIONS['toggle-notif'] = () => {};
 
+// ------------------------------------------------------------------ website selector (global context)
+function renderSiteSwitch() {
+  const box = $('#site-switch'); if (!box) return;
+  const w = curSite();
+  box.innerHTML = `<button class="ss-btn" id="ss-btn" aria-haspopup="true">${icon('globe')}<span>${w ? esc(w.name) : 'All Websites'}</span>${icon('chev')}</button>
+    <div class="ss-menu" role="menu"><div class="ss-head">Select Website</div>
+      <button class="ss-item ${S.site ? '' : 'on'}" data-act="site-pick" data-id="">${icon('layers')}<div><b>All Websites</b><span>Combined view</span></div>${S.site ? '' : icon('tick')}</button>
+      <div class="ss-sep"></div>
+      ${S.websites.map(x => `<button class="ss-item ${x.id === S.site ? 'on' : ''} ${x.status === 'inactive' ? 'off' : ''}" data-act="site-pick" data-id="${esc(x.id)}"><span class="dot ${x.connected ? 'on' : 'off'}"></span><div><b>${esc(x.name)}</b><span>${esc(x.status === 'inactive' ? 'Deactivated' : x.niche || (x.url || '').replace(/^https?:\/\//, ''))}</span></div>${x.id === S.site ? icon('tick') : ''}</button>`).join('')}
+      <div class="ss-sep"></div>
+      <button class="ss-item add" data-act="site-add">${icon('plus')}<div><b>Add New Website</b></div></button></div>`;
+  hydrate(box);
+  $('#ss-btn').onclick = e => { e.stopPropagation(); box.classList.toggle('open'); };
+}
+document.addEventListener('click', e => { if (!e.target.closest('#site-switch')) $('#site-switch')?.classList.remove('open'); });
+// switching website: everything that depends on it is reloaded for the new website, the page stays the same
+async function setSite(id) {
+  $('#site-switch')?.classList.remove('open');
+  if (id === S.site) return;
+  S.site = id; try { localStorage.setItem('cf-site', id); } catch {}
+  Object.assign(S, { wp: null, wpLists: null, settings: null, current: null, rules: null, logs: null, templates: [] });
+  S.asel.clear(); S.sel.clear(); S.feed.preview = null;
+  renderSiteSwitch();
+  await Promise.all([loadState(), loadArticles(), loadTitles(), loadWp()]).catch(() => {});
+  updateNav();
+  const w = curSite();
+  toast('info', w ? `Website: ${w.name}` : 'All Websites', w ? 'Everything now shows this website only.' : 'Combined view of every website.');
+  if ((S.route === 'article' || S.route === 'review') && location.hash !== '#/review') location.hash = '#/review'; else go();
+}
+ACTIONS['site-pick'] = el => setSite(el.dataset.id);
+ACTIONS['site-add'] = () => { $('#site-switch')?.classList.remove('open'); ACTIONS['site-edit']({ dataset: {} }); };
+
 $('#menu-btn').onclick = () => {
   if (matchMedia('(max-width: 900px)').matches) return $('#sidebar').classList.toggle('open');
   const collapsed = document.documentElement.classList.toggle('sb-collapsed');
   localStorage.setItem('cf-sidebar', collapsed ? 'collapsed' : '');
 };
 if (localStorage.getItem('cf-sidebar') === 'collapsed') document.documentElement.classList.add('sb-collapsed');
+// the page name as a tooltip (the collapsed sidebar shows only the icons)
+$$('.nav a').forEach(a => { a.title = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim(); });
 function applyTheme(mode) { document.documentElement.dataset.theme = mode; $('#theme-btn').innerHTML = icon(mode === 'dark' ? 'sun' : 'moon'); localStorage.setItem('cf-theme', mode); }
 $('#theme-btn').onclick = () => { const mode = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; applyTheme(mode); api('/api/settings', { method: 'POST', body: { app: { theme: mode } } }).catch(() => {}); };
 applyTheme(localStorage.getItem('cf-theme') || 'light');
@@ -439,7 +493,9 @@ $('#bell').onclick = async () => {
 setInterval(async () => {
   const working = (S.counts.working || 0) > 0;
   if (!working && !['queue', 'selected'].includes(S.route)) return;
+  const before = JSON.stringify(S.articles);
   try { await loadArticles(); } catch { return; }
+  if (JSON.stringify(S.articles) === before) return;   // nothing changed: do not repaint the page
   if (['dashboard', 'queue', 'selected'].includes(S.route)) rerender();
   else if (S.route === 'review' && !S.ui.editing) rerender();
   else if (S.route === 'article' && S.current && isWorking(S.current)) rerender();
@@ -449,6 +505,7 @@ setInterval(async () => { try { const d = await api('/api/notifications'); const
 // ------------------------------------------------------------------ boot
 window.addEventListener('load', async () => {
   hydrate();
+  await loadWebsites().catch(() => {});
   await Promise.all([loadState(), loadTitles(), loadArticles(), loadWp(), loadClaude()]).catch(() => {});
   updateNav();
   go();

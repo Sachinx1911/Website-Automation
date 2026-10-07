@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 import activity
+import websites
 
 RULES_FILE = Path(__file__).parent / "rules.json"
 TRIGGERS = {
@@ -51,12 +52,14 @@ def save_rules(items: list[dict]) -> None:
         RULES_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def upsert_rule(data: dict) -> dict:
+def upsert_rule(data: dict, website_id: str | None = None) -> dict:
+    """website_id: a rule created while a website is selected belongs to that website ("" / None = all websites).
+    An existing rule keeps its website."""
     items = load_rules()
     rule = next((r for r in items if r["id"] == data.get("id")), None)
     if rule is None:
         rule = {"id": uuid.uuid4().hex[:8], "created": datetime.now().isoformat(timespec="seconds"), "runs": 0,
-                "last_run": "", "enabled": True}
+                "last_run": "", "enabled": True, "website_id": website_id or ""}
         items.append(rule)
     for key in ("name", "description", "trigger", "action", "conditions", "config", "enabled"):
         if key in data:
@@ -75,7 +78,19 @@ def register(action: str, fn) -> None:
     _handlers[action] = fn
 
 
-def _matches(rule: dict, payload: dict) -> bool:
+def _matches(rule: dict, payload: dict, trigger: str = "") -> bool:
+    site_id = rule.get("website_id") or ""
+    if trigger == "new_article" and set(payload.get("story_urls") or [payload.get("url")]) & websites.hidden_urls(site_id):
+        return False   # deleted from Discover (on any source of the story)
+    if site_id:
+        # a website's rule never acts on another website's articles ...
+        if payload.get("website_id") and payload["website_id"] != site_id:
+            return False
+        # ... and new news only counts when it fits that website's niche and sources
+        if trigger == "new_article":
+            site = websites.get(site_id)
+            if not site or site.get("status") == "inactive" or websites.relevance(payload, site) < websites.threshold(site):
+                return False
     c = rule.get("conditions") or {}
     if c.get("sources") and payload.get("source_id") not in c["sources"] and payload.get("source") not in c["sources"]:
         return False
@@ -107,7 +122,8 @@ def _run(rule: dict, payload: dict) -> None:
             r["last_run"] = datetime.now().isoformat(timespec="seconds")
             r["last_status"] = status
     save_rules(items)
-    activity.log("Automation rule ran", "Automation", details[:300], status, user="System", article_id=payload.get("id", ""))
+    activity.log("Automation rule ran", "Automation", details[:300], status, user="System", article_id=payload.get("id", ""),
+                 website_id=rule.get("website_id") or payload.get("website_id") or "")
 
 
 def fire(trigger: str, payload: dict | None = None) -> int:
@@ -115,7 +131,7 @@ def fire(trigger: str, payload: dict | None = None) -> int:
     payload = payload or {}
     ran = 0
     for rule in load_rules():
-        if rule.get("enabled") and rule.get("trigger") == trigger and _matches(rule, payload):
+        if rule.get("enabled") and rule.get("trigger") == trigger and _matches(rule, payload, trigger):
             threading.Thread(target=_run, args=(rule, payload), daemon=True).start()
             ran += 1
     return ran

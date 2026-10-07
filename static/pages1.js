@@ -1,8 +1,8 @@
-/* Pages: Dashboard, Government Sources, Discover, Selected Articles, Processing Queue */
+/* Pages: Dashboard, Sources, Discover, Selected Articles, Processing Queue */
 
 // ------------------------------------------------------------------ DASHBOARD
 ROUTES.dashboard = async function (first) {
-  if (first) await Promise.all([loadState(), loadArticles(), loadTitles(), loadSources(), loadWp(), S.claude ? null : loadClaude(), api('/api/rules').then(d => { S.rules = d.items; })]);
+  if (first) await Promise.all([loadWebsites(), loadState(), loadArticles(), loadTitles(), loadSources(), loadWp(), S.claude ? null : loadClaude(), api('/api/rules').then(d => { S.rules = d.items; })]);
   const st = S.state, c = S.counts, arts = S.articles, t = today();
   const hour = new Date().getHours();
   const greet = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
@@ -19,7 +19,7 @@ ROUTES.dashboard = async function (first) {
 
   paint(`
   <div class="page-head">
-    <div><h1>${greet}, ${esc((S.state.user_name || 'Admin').split(' ')[0])}! 👋</h1><div class="subtitle">Here's what's happening with your current affairs content today.</div></div>
+    <div><h1>${greet}, ${esc((S.state.user_name || 'Admin').split(' ')[0])}! 👋</h1><div class="subtitle">Here's what's happening with your current affairs content today.</div>${ctxChip()}</div>
     <div class="head-right" style="text-align:right;display:block"><b style="font-size:14px">${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}</b><div class="subtitle" style="font-size:12.5px">Last updated: ${ago(st.fetched_at)}</div></div>
   </div>
   ${S.claude && S.claude.installed !== false && !S.claude.logged_in ? `<div class="alert warn">${icon('alert')}<div style="flex:1"><b>Claude is not logged in on this laptop.</b> Articles cannot be written until you log in (one time — it stays logged in after that).</div><button class="btn sm primary" data-act="claude-login" data-busy="Opening…">${icon('key')}Log in to Claude</button></div>` : ''}
@@ -30,6 +30,14 @@ ROUTES.dashboard = async function (first) {
     ${kpi({ href: '#/review', g: 'orange', ic: 'eye', val: review, label: 'Ready for Review', note: `${c.approved || 0} approved · ${c.draft || 0} drafts`, trend: review ? 'up' : '' })}
     ${kpi({ href: '#/published', g: 'pink', ic: 'rocket', val: st.published_today || 0, label: 'Published Today', ...tPub })}
   </div>
+  ${!S.site && S.websites.length > 1 ? `<div class="card section fade-up" style="margin-bottom:18px">
+    <div class="section-head"><div class="section-title">${icon('globe')}Websites</div><a class="link" href="#/wordpress">Manage websites →</a></div>
+    <div class="table-wrap"><table><thead><tr><th>Website</th><th>Niche</th><th>WordPress</th><th>Processing</th><th>To review</th><th>Approved</th><th>Scheduled</th><th>Published today</th><th>Published</th><th></th></tr></thead><tbody>
+    ${S.websites.map(w => `<tr class="${w.status === 'inactive' ? 'site-off' : ''}"><td><div class="tcell">${srcLogo(w.name, 'sm')}<div><b>${esc(w.name)}</b><div class="row-meta">${esc((w.url || '').replace(/^https?:\/\//, ''))}${w.status === 'inactive' ? ' · deactivated' : ''}</div></div></div></td>
+      <td class="row-meta">${esc(w.niche || '—')}</td><td>${w.connected ? '<span class="badge b-live"><span class="bd"></span>Connected</span>' : '<span class="badge b-failed">Not connected</span>'}</td>
+      <td>${w.stats.working}</td><td>${w.stats.review}</td><td>${w.stats.approved}</td><td>${w.stats.scheduled}</td><td><b>${w.stats.published_today}</b></td><td>${w.stats.published}</td>
+      <td><button class="btn sm" data-act="site-pick" data-id="${esc(w.id)}">Open</button></td></tr>`).join('')}
+    </tbody></table></div></div>` : ''}
   <div class="grid-a">
     <div class="card section fade-up">
       <div class="section-head"><div class="section-title">Content Pipeline ${icon('info')}</div><a class="btn sm soft" href="#/queue">View Details ${icon('arrow')}</a></div>
@@ -102,7 +110,7 @@ function queueTable(rows, withCheck = true) {
   ${rows.map((a, i) => { const [stg, pct, cls] = stageOf(a); const live = a.status === 'writing'; return `<tr class="clickable ${S.asel.has(a.id) ? 'on' : ''}" data-href="#/article/${a.id}">
     ${withCheck ? `<td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td>` : ''}
     <td class="row-meta">${i + 1}</td>
-    <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${srcCount(a)}${a.error ?`<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error.slice(0, 90))}</div>` : ''}</div></div></td>
+    <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${siteChip(a)}${srcCount(a)}${a.error ?`<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error.slice(0, 90))}</div>` : ''}</div></div></td>
     <td><div class="tcell">${srcLogo(a.source.source, 'sm')}<span style="font-size:12.5px">${esc(a.source.source)}</span></div></td>
     <td><span class="stage-pill ${cls}">${stg}</span></td>
     <td><div class="prog-cell"><div class="progress ${pct === 100 ? 'done' : ''} ${live ? 'live' : ''}"><i style="width:${pct}%"></i></div>${pct}%</div></td>
@@ -128,7 +136,7 @@ ROUTES.sources = async function (first) {
   const edit = S.ui.srcEdit ? S.sources.find(s => s.id === S.ui.srcEdit) : null;
   const errors = S.sources.filter(s => s.enabled && stats[s.id]?.error).length;
   paint(`
-  ${pageHead({ crumb: 'Government Sources', icon: 'bank', color: 'g-blue', title: 'Government Sources', sub: 'Manage trusted websites to fetch latest current affairs articles automatically.',
+  ${pageHead({ crumb: 'Sources', icon: 'bank', color: 'g-blue', title: 'Sources', sub: 'Manage the websites this website takes its news from.',
     right: `<div class="head-info">${icon('clock')}<div><span>Last Scan</span><b>${st.fetched_at ? fmtDT(st.fetched_at) : 'Never'}</b></div></div><button class="btn primary lg" data-act="scan" data-busy="Scanning…">${icon('refresh')}Scan All Sources</button>` })}
   <div class="kpis four stagger">
     ${kpi({ g: 'blue', ic: 'db', val: st.sources_total, label: 'Total Sources', note: `${S.sources.filter(s => s.official).length} official government` })}
@@ -136,15 +144,17 @@ ROUTES.sources = async function (first) {
     ${kpi({ g: 'orange', ic: 'file', val: st.titles_today, label: 'Articles Found Today', ...trendNote(st.titles_today, st.titles_yesterday) })}
     ${kpi({ g: errors ? 'red' : 'pink', ic: 'warn', val: errors, label: 'Errors', note: errors ? 'Check the sources below' : 'No issues', trend: errors ? 'down' : 'up' })}
   </div>
-  <div class="grid-side">
+  <div class="grid-side src-layout">
     <div class="card section">
-      <div class="section-head"><div class="section-title">All Government Sources</div><div class="acts"><div class="view-toggle"><button class="on">${icon('list')}</button><button data-act="src-grid">${icon('grid')}</button></div><button class="icon-btn" data-act="scan" title="Rescan">${icon('refresh')}</button></div></div>
+      <div class="section-head"><div class="section-title">All Sources</div><div class="acts"><div class="view-toggle"><button class="on">${icon('list')}</button><button data-act="src-grid">${icon('grid')}</button></div><button class="icon-btn" data-act="scan" title="Rescan">${icon('refresh')}</button></div></div>
       <div class="toolbar inner">
         <div class="search-in grow">${icon('search')}<input class="input" id="src-q" placeholder="Search sources…" value="${esc(S.ui.srcQ)}"></div>
         <select class="select" data-act="src-status"><option value="">All Status</option><option value="active" ${S.ui.srcStatus === 'active' ? 'selected' : ''}>Active</option><option value="error" ${S.ui.srcStatus === 'error' ? 'selected' : ''}>Error</option><option value="off" ${S.ui.srcStatus === 'off' ? 'selected' : ''}>Disabled</option></select>
         <select class="select" data-act="src-cat"><option value="">All Categories</option>${(S.sourceCats || []).map(c => `<option ${S.ui.srcCat === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>#</th>${th('src', 'name', 'Source name')}${th('src', 'category', 'Category')}<th>Base URL</th>${th('src', 'today', 'Articles today')}${th('src', 'scan', 'Last scan')}<th>Status</th><th>Actions</th></tr></thead><tbody>
+      ${S.site ? `<div class="alert info" style="margin-bottom:12px">${icon('info')}<div>These are <b>${esc(curSite()?.name || '')}</b>’s own sources. A source you add here is used only by this website.</div></div>`
+        : `<div class="alert info" style="margin-bottom:12px">${icon('info')}<div><b>All Websites:</b> the sources of every website. Pick a website in the top bar to add, change or remove its sources.</div></div>`}
+      <div class="table-wrap"><table><thead><tr><th>#</th>${th('src', 'name', 'Source name')}${th('src', 'category', 'Category')}<th>Base URL</th>${th('src', 'today', 'Articles today')}${th('src', 'scan', 'Last scan')}<th>Status</th>${S.site ? '' : '<th>Website</th>'}<th>Actions</th></tr></thead><tbody>
       ${slice.map((s, i) => { const x = stats[s.id] || {}; return `<tr class="${edit?.id === s.id ? 'on' : ''}">
         <td class="row-meta">${(page - 1) * per + i + 1}</td>
         <td><div class="tcell">${srcLogo(s.name)}<div><b class="${mr(s.name)}">${esc(s.name)}</b>${s.official ? ' <span class="badge b-official" style="padding:2px 7px;font-size:10px">Official</span>' : ''}<div class="t-sub">${esc(s.label)}${s.description ? ' · ' + esc(s.description) : ''}</div></div></div></td>
@@ -153,12 +163,13 @@ ROUTES.sources = async function (first) {
         <td><b>${s.today || 0}</b> <span class="row-meta">/ ${s.total || 0}</span></td>
         <td class="row-meta">${ago(x.checked)}</td>
         <td>${!s.enabled ? '<span class="badge b-off">Disabled</span>' : x.error ? `<span class="badge b-failed" title="${esc(x.error)}"><span class="bd"></span>Error</span>` : '<span class="badge b-active"><span class="bd"></span>Active</span>'}</td>
+        ${S.site ? '' : `<td>${(s.websites || []).map(id => `<span class="site-chip">${icon('globe')}${esc(siteById(id)?.name || id)}</span>`).join('') || '<span class="row-meta">No website</span>'}</td>`}
         <td><div class="acts"><button class="icon-btn blue" data-act="src-scan-one" data-id="${s.id}" title="Scan now">${icon('play')}</button><button class="icon-btn" data-act="src-edit" data-id="${s.id}" title="Edit">${icon('edit')}</button><button class="icon-btn red" data-act="remove-source" data-id="${s.id}" data-name="${esc(s.name)}" title="Delete">${icon('trash')}</button><button class="switch ${s.enabled ? 'on' : ''}" data-act="toggle-source" data-id="${s.id}" title="${s.enabled ? 'Disable' : 'Enable'}" style="width:36px;height:20px"></button></div></td></tr>`; }).join('') || `<tr><td colspan="8">${empty('search', 'No sources match', 'Try another filter.')}</td></tr>`}
       </tbody></table></div>
       ${pager(list.length, page, per, 'src-page')}
     </div>
     <div class="card section src-panel sticky">
-      <div class="section-head"><div class="section-title">${edit ? 'Edit Source' : 'Add / Edit Government Source'}</div>${edit ? `<button class="icon-btn" data-act="src-edit" data-id="">${icon('x')}</button>` : ''}</div>
+      <div class="section-head"><div class="section-title">${edit ? 'Edit Source' : 'Add / Edit Source'}</div>${edit ? `<button class="icon-btn" data-act="src-edit" data-id="">${icon('x')}</button>` : ''}</div>
       <div class="source-tabs"><button class="${!edit ? 'on' : ''}" data-act="src-edit" data-id="">Add New Source</button><button class="${edit ? 'on' : ''}" ${edit ? '' : 'disabled'}>Edit Source</button></div>
       <form id="src-form">
         <div class="field"><label>Source Name <em>*</em></label><input class="input" name="name" required placeholder="e.g. Press Information Bureau" value="${esc(edit?.name || '')}"></div>
@@ -175,7 +186,7 @@ ROUTES.sources = async function (first) {
   </div>
   <div class="grid-3">
     <div class="card info-card info-blue"><div class="ic">${icon('gear')}</div><div><b>Automatic Scanning</b><p>Create a Schedule rule to scan sources every 30 minutes without clicking.</p><a class="link" href="#/automation">Configure Automation →</a></div></div>
-    <div class="card info-card info-green"><div class="ic">${icon('shield')}</div><div><b>Trusted Government Sources</b><p>PIB and All India Radio are official. Coaching sites are marked as general sources.</p><a class="link" href="https://www.pib.gov.in" target="_blank">PIB website →</a></div></div>
+    <div class="card info-card info-green"><div class="ic">${icon('shield')}</div><div><b>Trusted Sources</b><p>PIB and All India Radio are official. Coaching sites are marked as general sources.</p><a class="link" href="https://www.pib.gov.in" target="_blank">PIB website →</a></div></div>
     <div class="card info-card info-pink"><div class="ic">${icon('bulb')}</div><div><b>Pro Tip</b><p>Use the site's current-affairs listing page or RSS feed URL for the most reliable results.</p></div></div>
   </div>`, first);
   bindSourceForm(edit);
@@ -221,7 +232,7 @@ ACTIONS['toggle-source'] = async el => {
   await Promise.all([loadSources(), loadState()]); updateNav(); rerender();
 };
 ACTIONS['remove-source'] = async el => {
-  if (!await confirmBox({ title: `Remove ${el.dataset.name}?`, text: 'This source will no longer be scanned. You can add it again later.', ok: 'Remove', kind: 'danger-solid' })) return;
+  if (!await confirmBox({ title: `Remove ${el.dataset.name}?`, text: S.site ? `It will no longer bring news to <b>${esc(curSite()?.name || '')}</b>. You can add it again later.` : 'It is removed from every website and no longer scanned. You can add it again later.', ok: 'Remove', kind: 'danger-solid' })) return;
   await api(`/api/sources/${el.dataset.id}`, { method: 'DELETE' });
   toast('ok', 'Source removed', el.dataset.name);
   await Promise.all([loadSources(), loadState()]); updateNav(); rerender();
@@ -255,8 +266,13 @@ function feedItems() {
   // a story found on several sources is listed once (its lead row); a filter matching any of its sources keeps it
   const latest = i => [i.date || t, ...(i.also || []).map(o => o.date || '')].sort().pop();   // newest date of any of its sources
   const items = S.titles.items.filter(i => (!i.group || i.group === i.url)
+    && !(i.article_id && (!S.site || i.used_by === S.site))   // already used for this website: not listed again
+    && (!S.site || S.feed.showAll || (i.relevance ?? 100) >= (S.titles.threshold ?? 0))
     && (fits(i, i.category) || (i.also || []).some(o => fits(o, i.category)))
     && (when === 'all' || (when === 'today' ? latest(i) === t : latest(i) >= min)));
+  // newest first: day, then when a scan first found it, then the publish time (where the source gives one)
+  const newest = i => `${latest(i)}|${i.seen || ''}|${i.time || ''}`;
+  if (!sort || sort === 'latest') items.sort((a, b) => newest(b).localeCompare(newest(a)));
   if (sort === 'title') items.sort((a, b) => a.title.localeCompare(b.title));
   if (sort === 'source') items.sort((a, b) => a.source.localeCompare(b.source));
   return items;
@@ -289,18 +305,20 @@ ROUTES.discover = async function (first) {
     <select class="select" data-act="feed-when"><option value="today" ${S.feed.when === 'today' ? 'selected' : ''}>Date: Today</option><option value="3d" ${S.feed.when === '3d' ? 'selected' : ''}>Last 3 days</option><option value="all" ${S.feed.when === 'all' ? 'selected' : ''}>All dates</option></select>
     <select class="select" data-act="feed-sort"><option value="latest">Sort: Latest First</option><option value="title" ${S.feed.sort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="source" ${S.feed.sort === 'source' ? 'selected' : ''}>Source</option></select>
   </div>
+  ${S.site ? (() => { const all = S.titles.items.filter(i => (!i.group || i.group === i.url) && !(i.article_id && i.used_by === S.site)), hidden = all.filter(i => (i.relevance ?? 100) < (S.titles.threshold ?? 0)).length;
+      return hidden ? `<div class="alert info">${icon('filter')}<div style="flex:1">${S.feed.showAll ? `Showing all news, including <b>${hidden}</b> below ${esc(curSite()?.name || '')}'s ${S.titles.threshold}% relevance threshold.` : `<b>${hidden}</b> news item${hidden > 1 ? 's' : ''} hidden: below ${esc(curSite()?.name || '')}'s ${S.titles.threshold}% niche relevance.`}</div><button class="btn sm" data-act="feed-showall">${S.feed.showAll ? 'Only relevant' : 'Show all'}</button></div>` : ''; })() : ''}
   ${Object.keys(S.titles.errors || {}).length ? `<div class="alert warn">${icon('alert')}<div>Some sources could not be read: ${Object.keys(S.titles.errors).map(esc).join(', ')}</div></div>` : ''}
   <div class="${pv ? 'grid-side' : ''}">
     <div class="card disc-card" style="overflow:hidden">
       <div class="disc-head"><div class="cb ${allSel ? 'on' : ''}" data-act="select-page">${icon('tick')}</div><div></div><div>Select All (${S.sel.size}/${items.length} selected)</div><div>Source</div><div>Date</div><div>Category</div><div></div></div>
-      ${slice.length ? slice.map(i => { const used = !!i.article_id, on = S.sel.has(i.url); return `<div class="disc-row ${on ? 'on' : ''} ${used ? 'used' : ''}" data-url="${esc(i.url)}">
+      ${slice.length ? slice.map(i => { const used = !!i.article_id && (!S.site || i.used_by === S.site), other = !!i.article_id && !used, on = S.sel.has(i.url); return `<div class="disc-row ${on ? 'on' : ''} ${used ? 'used' : ''}" data-url="${esc(i.url)}">
         <div class="cb ${on ? 'on' : used ? 'dis' : ''}" data-act="pick" data-url="${esc(i.url)}">${icon('tick')}</div>
         <div class="thumb lazy-thumb ph-thumb" data-url="${esc(i.url)}" style="width:80px;height:56px;background:linear-gradient(135deg,${colorFor(i.source)[1]},${colorFor(i.source)[0]})">${esc(initials(i.source))}</div>
-        <div class="dmain" style="min-width:0"><div class="dt ${mr(i.title)}" data-act="preview" data-url="${esc(i.url)}">${esc(i.title)}</div><div class="ds lazy-desc ${mr(i.excerpt)}" data-url="${esc(i.url)}">${esc(i.excerpt || '')}</div>${alsoLine(i)}${used ? `<span class="badge b-used" style="margin-top:4px">${i.article_id ? 'Already selected' : ''}</span>` : ''}</div>
+        <div class="dmain" style="min-width:0"><div class="dt ${mr(i.title)}" data-act="preview" data-url="${esc(i.url)}">${esc(i.title)}</div><div class="ds lazy-desc ${mr(i.excerpt)}" data-url="${esc(i.url)}">${esc(i.excerpt || '')}</div>${alsoLine(i)}${fitLine(i)}${used ? `<span class="badge b-used" style="margin-top:4px">${i.article_id ? 'Already selected' : ''}</span>` : ''}${other ? `<span class="badge b-pending" style="margin-top:4px" title="One news story goes to one website. Select it to write a separate article for this website too.">${icon('globe')}Used by ${esc(siteById(i.used_by)?.name || 'another website')}</span>` : ''}</div>
         <div class="dsrc">${srcLogo(i.source, 'sm')}<span>${esc(i.source)}</span></div>
         <div class="row-meta">${fmtDate(i.date)}</div>
         <div class="dcat">${catPill(i.category)}</div>
-        <div class="dact"><a class="btn sm" target="_blank" href="${esc(i.url)}">View Source</a>${used ? `<a class="btn sm soft" href="#/article/${i.article_id}">Open</a>` : `<button class="btn sm ${on ? 'primary' : ''}" data-act="pick" data-url="${esc(i.url)}">${icon('tick')}${on ? 'Selected' : 'Select'}</button>`}</div></div>`; }).join('')
+        <div class="dact"><a class="btn sm" target="_blank" href="${esc(i.url)}">View Source</a><button class="icon-btn red" data-act="feed-del" data-url="${esc(i.url)}" title="Delete: never show this news again">${icon('trash')}</button>${used ? `<a class="btn sm soft" href="#/article/${i.article_id}">Open</a>` : `<button class="btn sm ${on ? 'primary' : ''}" data-act="pick" data-url="${esc(i.url)}">${icon('tick')}${on ? 'Selected' : 'Select'}</button>`}</div></div>`; }).join('')
       : `<div style="padding:20px">${empty('search', S.titles.items.length ? 'No articles match' : 'No news loaded yet', S.titles.items.length ? 'Try "All dates" or another source.' : 'Scan your sources to load today\'s titles.', `<button class="btn primary" data-act="scan" data-busy="Scanning…">${icon('refresh')}Scan sources now</button>`)}</div>`}
       <div style="padding:0 18px 14px">${pager(items.length, page, per, 'feed-page')}</div>
     </div>
@@ -346,7 +364,8 @@ document.addEventListener('input', e => { if (e.target.id === 'feed-q') { S.feed
 ACTIONS.pick = (el, e) => {
   e.stopPropagation();
   const item = S.titles.items.find(i => i.url === el.dataset.url);
-  if (!item || item.article_id) return;
+  // news already written for the selected website (or for any website, in All mode) cannot be picked again
+  if (!item || (item.article_id && (!S.site || item.used_by === S.site))) return;
   S.sel.has(item.url) ? S.sel.delete(item.url) : S.sel.set(item.url, item);
   ROUTES.discover(false);
 };
@@ -361,8 +380,20 @@ ACTIONS.preview = el => { S.feed.preview = { url: el.dataset.url, loaded: false 
 ACTIONS['preview-close'] = () => { S.feed.preview = null; ROUTES.discover(false); };
 ACTIONS['add-selection'] = async el => {
   const items = [...S.sel.values()], process = !!el.dataset.process;
+  let website_id, force = false;
+  if (!S.site) {   // All Websites: an article always belongs to one website, so ask which
+    website_id = await pickWebsite(items);
+    if (!website_id) return;
+  } else {
+    const taken = items.filter(i => i.article_id && i.used_by !== S.site);
+    if (taken.length) {   // one source story -> one primary website, unless the admin explicitly wants both
+      const names = [...new Set(taken.map(i => siteById(i.used_by)?.name || 'another website'))].join(', ');
+      force = await confirmBox({ title: `Write ${taken.length > 1 ? 'these news' : 'this news'} for ${curSite().name} too?`,
+        text: `${taken.length} of the selected news ${taken.length > 1 ? 'were' : 'was'} already written for <b>${esc(names)}</b>. Continue to write a separate article for <b>${esc(curSite().name)}</b> as well, or Cancel to skip ${taken.length > 1 ? 'them' : 'it'}.`, ok: 'Write for both' });
+    }
+  }
   await busy(el, async () => {
-    await api('/api/select', { method: 'POST', body: { items, process } });
+    await api('/api/select', { method: 'POST', body: { items, process, website_id, force }, site: website_id || undefined });
     toast('ok', process ? `Processing ${items.length} article${items.length > 1 ? 's' : ''} with Claude` : `${items.length} article${items.length > 1 ? 's' : ''} added to Selected Articles`);
     S.sel.clear();
     await Promise.all([loadTitles(), loadArticles()]);
@@ -401,7 +432,7 @@ ROUTES.selected = async function (first) {
       </div>
       ${list.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>#</th><th>Article title</th><th>Source</th><th>Category</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${list.map((a, i) => `<tr class="${S.asel.has(a.id) ? 'on' : ''}"><td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td><td class="row-meta">${i + 1}</td>
-        <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${srcCount(a)}<div class="t-sub ${mr(a.source.excerpt)}">${esc(a.source.excerpt || (a.has_text ? `${a.words || ''} source content extracted` : 'Source content not fetched yet'))}</div>${a.error ? `<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error)}</div>` : ''}</div></div></td>
+        <td><div class="tcell">${thumb(a, 'thumb')}<div><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${siteChip(a)}${srcCount(a)}<div class="t-sub ${mr(a.source.excerpt)}">${esc(a.source.excerpt || (a.has_text ? `${a.words || ''} source content extracted` : 'Source content not fetched yet'))}</div>${a.error ? `<div class="t-sub" style="color:var(--danger-ink)">${esc(a.error)}</div>` : ''}</div></div></td>
         <td><div class="tcell">${srcLogo(a.source.source, 'sm')}<span style="font-size:12.5px">${esc(a.source.source)}</span></div></td><td>${catPill(a.source.category)}</td><td class="row-meta">${fmtDate(a.source.date)}</td>
         <td>${a.status === 'error' ? badge('error') : a.has_text ? '<span class="badge b-extracted"><span class="bd"></span>Extracted</span>' : '<span class="badge b-selected"><span class="bd"></span>Selected</span>'}</td>
         <td><div class="acts"><a class="icon-btn" href="#/article/${a.id}" title="View">${icon('eye')}</a><button class="icon-btn red" data-act="one" data-a="delete" data-id="${a.id}" title="Remove">${icon('trash')}</button><button class="icon-btn" data-act="one" data-a="extract" data-id="${a.id}" title="Extract">${icon('download')}</button></div></td></tr>`).join('')}
@@ -493,3 +524,38 @@ ACTIONS['q-refresh'] = async () => { await loadArticles(); ROUTES.queue(false); 
 ACTIONS['q-pause-all'] = el => runBulk('pause', S.articles.filter(a => a.status === 'queued').map(a => a.id), el);
 ACTIONS['q-retry-failed'] = el => runBulk('retry', S.articles.filter(a => a.status === 'error').map(a => a.id), el);
 ACTIONS['q-process-new'] = el => { const ids = S.articles.filter(a => ['selected', 'extracted', 'paused'].includes(a.status)).map(a => a.id); if (!ids.length) { location.hash = '#/discover'; return; } return runBulk('process', ids, el); };
+
+// relevance of a news item to the selected website, and the other websites whose niche it fits
+function fitLine(i) {
+  const others = (i.fits || []).filter(id => id !== S.site).map(id => siteById(id)?.name).filter(Boolean);
+  const pct = S.site && i.relevance !== undefined ? `<span class="fit-badge ${i.relevance >= 85 ? 'hi' : i.relevance >= (S.titles.threshold ?? 75) ? 'mid' : 'lo'}" title="Niche relevance for ${esc(curSite()?.name || '')}">${i.relevance}% match</span>` : '';
+  const more = S.site ? '' : others.length ? `<span class="fit-more" title="Potentially relevant to multiple websites">${icon('globe')}Fits: ${others.map(esc).join(', ')}</span>` : (S.websites.length > 1 ? '<span class="fit-more none">No website niche match</span>' : '');
+  return pct || more ? `<div class="fit-line">${pct}${more}</div>` : '';
+}
+// delete news from Discover: hidden for this website (for every website in All Websites mode), also after new scans
+async function hideNews(items) {
+  if (!items.length) return;
+  const n = items.length, where = S.site ? esc(curSite()?.name || 'this website') : 'any website';
+  if (!await confirmBox({ title: `Delete ${n} news item${n > 1 ? 's' : ''}?`, text: `${n > 1 ? 'They' : 'It'} will not be shown again in Discover for <b>${where}</b>, also after new scans.`, ok: 'Delete', kind: 'danger-solid' })) return;
+  await api('/api/titles/hide', { method: 'POST', body: { items: items.map(i => ({ url: i.url, title: i.title, also: (i.also || []).map(o => o.url) })) } });
+  const urls = new Set(items.flatMap(i => [i.url, ...(i.also || []).map(o => o.url)]));
+  S.titles.items = S.titles.items.filter(i => !urls.has(i.url) && !urls.has(i.group));
+  items.forEach(i => S.sel.delete(i.url));
+  toast('ok', `${n} news item${n > 1 ? 's' : ''} deleted`, 'They will not come back after a scan.');
+  updateNav(); renderBulk(); ROUTES.discover(false);
+}
+ACTIONS['feed-del'] = (el, e) => { e.stopPropagation(); const i = S.titles.items.find(x => x.url === el.dataset.url); if (i) hideNews([i]); };
+ACTIONS['feed-del-sel'] = () => hideNews([...S.sel.values()]);
+ACTIONS['feed-showall'] = () => { S.feed.showAll = !S.feed.showAll; S.feed.page = 1; ROUTES.discover(false); };
+// All Websites mode: choose the website the selected news is written for (best niche match first)
+function pickWebsite(items) {
+  const act = S.websites.filter(w => w.status !== 'inactive');
+  const votes = id => items.filter(i => (i.fits || []).includes(id)).length;
+  const sorted = [...act].sort((a, b) => votes(b.id) - votes(a.id));
+  return new Promise(resolve => {
+    const m = modal(`<h3>Write for which website?</h3><p>Each article belongs to one website — its niche, Claude template, SEO and WordPress are used.</p>
+      <div class="site-pick">${sorted.map((w, k) => `<label class="sp-item"><input type="radio" name="sp" value="${esc(w.id)}" ${k === 0 ? 'checked' : ''}><div><b>${esc(w.name)}</b><span>${esc(w.niche || '')}${votes(w.id) ? ` · fits ${votes(w.id)} of ${items.length}` : ''}</span></div>${w.connected ? '' : '<span class="badge b-off">Not connected</span>'}</label>`).join('')}</div>
+      <div class="mbtns"><button class="btn" data-x="0">Cancel</button><button class="btn primary" data-x="1">${icon('tick')}Continue</button></div>`, 'sm');
+    m.addEventListener('click', e => { const b = e.target.closest('[data-x]'); if (!b) return; const v = m.querySelector('input[name=sp]:checked')?.value; closeModal(); resolve(b.dataset.x === '1' ? v : null); });
+  });
+}

@@ -8,7 +8,12 @@
     "config": {
       "reg": 3,
       "lang": 1
-    }
+    },
+    "category": "National",
+    "description": "Press Information Bureau – Government of India press releases",
+    "site": "https://www.pib.gov.in",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "034f3447",
@@ -19,7 +24,12 @@
     "config": {
       "reg": 1,
       "lang": 9
-    }
+    },
+    "category": "State",
+    "description": "PIB Mumbai – Marathi press releases",
+    "site": "https://www.pib.gov.in",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "94e56739",
@@ -33,7 +43,12 @@
         "lang": "en",
         "categories": "41706,33,39"
       }
-    }
+    },
+    "category": "National",
+    "description": "All India Radio news (national, international, business)",
+    "site": "https://newsonair.gov.in",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "724a736d",
@@ -46,7 +61,12 @@
       "skip": [
         "news in short"
       ]
-    }
+    },
+    "category": "General",
+    "description": "",
+    "site": "https://www.nextias.com/ca",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "881f096e",
@@ -59,7 +79,12 @@
       "params": {
         "categories": "4"
       }
-    }
+    },
+    "category": "General",
+    "description": "",
+    "site": "https://crackittoday.com",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "dd285cf5",
@@ -72,7 +97,12 @@
       "params": {
         "categories": "1566,1230"
       }
-    }
+    },
+    "category": "General",
+    "description": "",
+    "site": "https://forumias.com/blog",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "4eac7e3e",
@@ -86,7 +116,12 @@
       "params": {
         "per_page": 30
       }
-    }
+    },
+    "category": "General",
+    "description": "",
+    "site": "https://www.civilsdaily.com",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "3d6005c7",
@@ -100,7 +135,12 @@
       "params": {
         "per_page": 20
       }
-    }
+    },
+    "category": "General",
+    "description": "",
+    "site": "https://pwonlyias.com",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "cf83bd3d",
@@ -108,7 +148,12 @@
     "official": false,
     "name": "Vision IAS",
     "kind": "visionias",
-    "config": {}
+    "config": {},
+    "category": "General",
+    "description": "",
+    "site": "https://visionias.in",
+    "frequency": "manual",
+    "section": ""
   },
   {
     "id": "717be141",
@@ -116,6 +161,56 @@
     "official": false,
     "name": "Dhyeya IAS",
     "kind": "dhyeyaias",
-    "config": {}
+    "config": {},
+    "category": "General",
+    "description": "",
+    "site": "https://www.dhyeyaias.com",
+    "frequency": "manual",
+    "section": ""
+  },
+  {
+    "id": "e9ae7d26",
+    "name": "majhinaukri",
+    "kind": "rss",
+    "config": {
+      "url": "https://majhinaukri.in/feed/"
+    },
+    "enabled": true,
+    "official": false,
+    "category": "General",
+    "description": "",
+    "frequency": "60",
+    "section": "",
+    "site": "https://majhinaukri.in/"
+  },
+  {
+    "id": "6be27796",
+    "name": "sarkariresult",
+    "kind": "rss",
+    "config": {
+      "url": "https://sarkariresult.com.cm/feed/"
+    },
+    "enabled": true,
+    "official": false,
+    "category": "General",
+    "description": "",
+    "frequency": "60",
+    "section": "",
+    "site": "https://sarkariresult.com.cm/"
+  },
+  {
+    "id": "dea8823a",
+    "name": "mahabharti",
+    "kind": "rss",
+    "config": {
+      "url": "https://mahabharti.in/feed/"
+    },
+    "enabled": true,
+    "official": false,
+    "category": "General",
+    "description": "",
+    "frequency": "60",
+    "section": "",
+    "site": "https://mahabharti.in/"
   }
 ]

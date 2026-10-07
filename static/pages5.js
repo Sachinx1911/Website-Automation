@@ -30,7 +30,8 @@ function apFiltered() {
 
 ROUTES.approved = async function (first) {
   if (first) {
-    await Promise.all([loadArticles(), loadState(), loadWp(), loadSettings()]);
+    await Promise.all([loadArticles(), loadState(), loadSettings()]);   // no wait for the live WordPress check
+    if (!S.wp) loadWp();
     if (S.state.wp_ready && !S.wpLists) S.wpLists = await api('/api/wordpress/lists').catch(() => null);
     AP_FILTERS.forEach(k => { S.ui[k] = ''; });
     Object.assign(S.ui, { apTab: 'all', apPage: 1, apMode: 'now' });
@@ -113,14 +114,14 @@ function apRow(a, n) {
     `<button class="dd-item" data-act="one" data-a="draft" data-id="${a.id}">${icon('save')}Send as WordPress draft</button>`,
     g === 'changes' ? `<button class="dd-item" data-act="one" data-a="approve" data-id="${a.id}">${icon('tick')}Approve</button>` : `<button class="dd-item" data-act="one" data-a="changes" data-id="${a.id}">${icon('edit')}Mark as needs changes</button>`,
     a.url ? `<a class="dd-item" target="_blank" href="${esc(a.url)}">${icon('ext')}Open on WordPress</a>` : '',
-    a.wp_id ? `<a class="dd-item" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post.php?post=${a.wp_id}&action=edit">${icon('wp')}Edit in WordPress</a>` : '',
+    a.wp_id ? `<a class="dd-item" target="_blank" href="${esc(siteUrlOf(a))}/wp-admin/post.php?post=${a.wp_id}&action=edit">${icon('wp')}Edit in WordPress</a>` : '',
     `<div class="dd-sep"></div><button class="dd-item danger" data-act="one" data-a="delete" data-id="${a.id}">${icon('trash')}Remove from dashboard</button>`,
   ].join('');
   return `<tr class="clickable ${on ? 'on' : ''} ${a.id === S.ui.apSel ? 'cur' : ''}" data-act="ap-pick" data-id="${a.id}">
     <td><div class="cb ${on ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td>
     <td class="row-meta ap-c-num">${n}</td>
     <td class="ap-c-thumb">${thumb(a)}</td>
-    <td><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${a.excerpt ? `<div class="ap-ex ${mr(a.excerpt)}">${esc(a.excerpt)}</div>` : ''}
+    <td><div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div>${siteChip(a)}${a.excerpt ? `<div class="ap-ex ${mr(a.excerpt)}">${esc(a.excerpt)}</div>` : ''}
       <div class="ap-inline">${srcLogo(a.source.source, 'xs')}<span class="ap-src">${esc(a.source.source)}</span>${srcCount(a)}${catPill(a.categories[0])}<span class="ap-inline-date">${fmtDate(apWhen(a))}, ${fmtTime(apWhen(a))}</span><span class="ap-inline-status">${apBadge(a)}</span></div></td>
     <td class="ap-c-src"><div class="tcell" style="gap:8px">${srcLogo(a.source.source, 'sm')}<span class="ap-src">${esc(a.source.source)}</span></div>${srcCount(a)}</td>
     <td class="ap-c-cat">${catPill(a.categories[0])}</td>
@@ -152,12 +153,12 @@ function apPreview(a) {
 
 function apOptions(a) {
   if (!a) return '';
-  const wpOn = S.state.wp_ready, pub = S.settings?.publish || {}, mode = S.ui.apMode;
+  const wpOn = siteById(a.website_id)?.connected ?? S.state.wp_ready, pub = S.settings?.publish || {}, mode = S.ui.apMode;
   const cats = [...new Set([...(S.wpLists?.categories || []), ...a.categories])];
   return `<div class="card section">
     <div class="section-title" style="font-size:15px;margin-bottom:12px">Publishing Options</div>
     <div class="seg"><button class="${mode === 'now' ? 'on' : ''}" data-act="ap-mode" data-v="now">Publish Now</button><button class="${mode === 'schedule' ? 'on' : ''}" data-act="ap-mode" data-v="schedule">Schedule</button></div>
-    <div class="field"><label>WordPress Site</label><div class="ap-site"><div class="wp-logo sm">${icon('wp')}</div><span class="ap-site-url">${esc((S.state.wp_url || 'Not configured').replace(/^https?:\/\//, ''))}</span>
+    <div class="field"><label>WordPress Site</label><div class="ap-site"><div class="wp-logo sm">${icon('wp')}</div><span class="ap-site-url">${esc((siteUrlOf(a) || 'Not configured').replace(/^https?:\/\//, ''))}</span>
       ${wpOn ? '<span class="badge b-live"><span class="bd"></span>Connected</span>' : '<a class="badge b-failed" href="#/wordpress">Connect</a>'}</div></div>
     <div class="${mode === 'schedule' ? 'field-row' : ''}">
       <div class="field"><label>Post Category</label><select class="select mr" id="ap-o-cat" style="width:100%"><option value="">— None —</option>${cats.map(c => `<option ${a.categories[0] === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>

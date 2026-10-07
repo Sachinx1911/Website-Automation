@@ -181,12 +181,15 @@ SEO:
 # ---------------------------------------------------------------- WordPress
 
 class WordPress:
-    def __init__(self):
-        if not (WP_URL and WP_USER and WP_APP_PASSWORD):
+    def __init__(self, url: str = "", user: str = "", password: str = ""):
+        """The dashboard passes one website's own connection; the CLI falls back to the .env values."""
+        url, user, password = (url or WP_URL).rstrip("/"), user or WP_USER, password or WP_APP_PASSWORD
+        if not (url and user and password):
             sys.exit(".env madhe WP_URL, WP_USER, WP_APP_PASSWORD bhara (.env.example paha)")
-        self.api = f"{WP_URL}/wp-json/wp/v2"
+        self.url = url
+        self.api = f"{url}/wp-json/wp/v2"
         self.session = requests.Session()
-        self.session.auth = (WP_USER, WP_APP_PASSWORD)
+        self.session.auth = (user, password)
         self.session.headers["User-Agent"] = "wp-article-automation/1.0"
 
     def check_auth(self) -> str:
@@ -222,11 +225,12 @@ class WordPress:
         return r.json()
 
 
-def site_catalog() -> tuple[list[str], list[tuple[str, str]]]:
+def site_catalog(url: str = "") -> tuple[list[str], list[tuple[str, str]]]:
     """Website varil categories ani publish jhalelya posts (title, link). Login lagat nahi."""
-    if not WP_URL:
+    url = (url or WP_URL).rstrip("/")
+    if not url:
         return [], []
-    api = f"{WP_URL}/wp-json/wp/v2"
+    api = f"{url}/wp-json/wp/v2"
     headers = {"User-Agent": "wp-article-automation/1.0"}
     try:
         r = requests.get(f"{api}/categories", params={"per_page": 100, "_fields": "name"},

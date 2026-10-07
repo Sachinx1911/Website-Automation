@@ -33,6 +33,7 @@ import app  # WordPress client, claude_json, site_catalog
 import automation
 import settings as cfg
 import sources
+import websites
 
 BASE = Path(__file__).parent
 CA_DIR = BASE / "ca_articles"
@@ -103,11 +104,22 @@ def all_articles() -> list[dict]:
 def used_urls() -> dict[str, str]:
     """source url -> article id (so Discover can show what is already selected/written).
     The other sources an article was combined from count as used too."""
+    return {url: u["id"] for url, u in used_by().items()}
+
+
+def used_by(prefer: str = "") -> dict[str, dict]:
+    """source url -> {id, website_id} of the article written from it (one source story -> one primary website).
+    prefer: when several websites wrote the same story, that website's own article is the one returned."""
     used = {}
     for m in all_articles():
+        ref = {"id": m["id"], "website_id": m.get("website_id") or ""}
+        mine = bool(prefer) and ref["website_id"] == prefer
         for r in m.get("related", []):
-            used.setdefault(r["url"], m["id"])
-        used[m["source"]["url"]] = m["id"]
+            if r["url"] not in used or (mine and used[r["url"]]["website_id"] != prefer):
+                used[r["url"]] = ref
+        url = m["source"]["url"]
+        if mine or not (url in used and prefer and used[url]["website_id"] == prefer):
+            used[url] = ref
     return used
 
 
@@ -129,11 +141,12 @@ def set_status(aid: str, status: str, msg: str = "", level: str = "info", **extr
 SOURCE_KEYS = ("title", "url", "source", "source_id", "date", "category", "excerpt")
 
 
-def create_selection(item: dict, related: list[dict] | None = None) -> dict:
-    """A title picked in Discover becomes an article with status 'selected'.
+def create_selection(item: dict, related: list[dict] | None = None, website_id: str = "") -> dict:
+    """A title picked in Discover becomes an article with status 'selected', for one website.
     related: the same story on other sources; the article is written from all of them."""
     aid = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     meta = {"id": aid, "status": "selected", "created": datetime.now().isoformat(timespec="seconds"),
+            "website_id": website_id or (websites.default() or {}).get("id", ""),
             "source": {k: item.get(k, "") for k in SOURCE_KEYS},
             "related": [{k: r.get(k, "") for k in SOURCE_KEYS} for r in related or []],
             "notes": "", "log": []}
@@ -285,7 +298,7 @@ def extract(aid: str) -> dict:
         read = [o for o in others if o.get("text")]
         meta.update(source_text=src["text"], source_image=src["image"] or next((o["image"] for o in read if o.get("image")), ""), step="",
                     related_texts=[{k: o[k] for k in ("source", "title", "url", "text")} for o in read])
-        if meta["source_image"] and not featured_image(aid) and cfg.load_settings()["publish"].get("image_source", "source") == "source":
+        if meta["source_image"] and not featured_image(aid) and cfg.load_settings(websites.site_of(meta))["publish"].get("image_source", "source") == "source":
             meta["image_downloaded"] = download_image(aid, meta["source_image"])
         if meta["status"] == "selected":
             meta["status"] = "extracted"
@@ -304,14 +317,19 @@ def extract(aid: str) -> dict:
         raise
 
 
-_catalog_cache: dict = {}
+_catalog_cache: dict = {}   # website id -> {at, cats, posts}
 
 
-def _catalog() -> tuple[list[str], list[tuple[str, str]]]:
-    if not _catalog_cache or time.time() - _catalog_cache["at"] > 3600:
-        cats, posts = app.site_catalog()
-        _catalog_cache.update(at=time.time(), cats=cats, posts=posts)
-    return _catalog_cache["cats"], _catalog_cache["posts"]
+def _catalog(site: dict | None = None) -> tuple[list[str], list[tuple[str, str]]]:
+    """Categories and recent posts of one website's WordPress (each website has its own)."""
+    site = site or websites.default()
+    url = websites.wp_config(site)[0]
+    key = (site or {}).get("id", "")
+    hit = _catalog_cache.get(key)
+    if not hit or time.time() - hit["at"] > 3600:
+        cats, posts = app.site_catalog(url) if url else ([], [])
+        hit = _catalog_cache[key] = {"at": time.time(), "cats": cats, "posts": posts}
+    return hit["cats"], hit["posts"]
 
 
 QUICK_RULES = {
@@ -327,10 +345,12 @@ LENGTHS = {"short": "500-800", "medium": "800-1200", "long": "1500-2000"}
 
 
 def build_prompt(meta: dict, template: dict | None = None) -> tuple[str, str, dict]:
-    """System prompt, user prompt and JSON schema for one article."""
-    s = cfg.load_settings()
-    template = template or cfg.get_template(meta.get("template_id"))
-    cats, posts = _catalog()
+    """System prompt, user prompt and JSON schema for one article — with the settings, template, categories and
+    niche of the website the article belongs to."""
+    site = websites.site_of(meta)
+    s = cfg.load_settings(site)
+    template = template or cfg.get_template(meta.get("template_id"), site)
+    cats, posts = _catalog(site)
     schema = json.loads(json.dumps(ARTICLE_SCHEMA))
     if cats:
         schema["properties"]["categories"]["items"]["enum"] = cats
@@ -348,7 +368,7 @@ def build_prompt(meta: dict, template: dict | None = None) -> tuple[str, str, di
         rules.append("Append this disclaimer paragraph at the very end: " + con["disclaimer"])
     if con.get("language_note"):
         rules.append(con["language_note"])
-    system = template["system"] + ("\n\n## Output rules\n" + "\n".join(f"- {r}" for r in rules) if rules else "")
+    system = template["system"] + websites.profile_block(site) + ("\n\n## Output rules\n" + "\n".join(f"- {r}" for r in rules) if rules else "")
     src = meta["source"]
     content, source_names = meta.get("source_text", ""), src["source"]
     if related:
@@ -374,8 +394,10 @@ def build_prompt(meta: dict, template: dict | None = None) -> tuple[str, str, di
 
 def write_article(meta: dict, template: dict | None = None) -> dict:
     system, prompt, schema = build_prompt(meta, template)
-    s = cfg.load_settings()
-    model = (template or {}).get("model") or s.get("model") or ""
+    site = websites.site_of(meta)
+    s = cfg.load_settings(site)
+    template = template or cfg.get_template(meta.get("template_id"), site)
+    model = template.get("model") or s.get("model") or ""
     data = app.claude_json(system, prompt, schema, model=model)
     seo = s.get("seo", {})
     slug = re.sub(r"[^a-z0-9-]+", "-", data["slug"].lower()).strip("-")[:int(seo.get("slug_max") or 70)].strip("-") or meta["id"]
@@ -404,7 +426,8 @@ def generate(aid: str) -> None:
         save(meta)
         activity.log("Article generated", "AI Processing", data["title"], user="System", article_id=aid)
         automation.fire("article_ready", event_payload(meta))
-        if wp_ready() and cfg.load_settings()["publish"].get("auto_draft", True):
+        site = websites.site_of(meta)
+        if wp_ready(site) and cfg.load_settings(site)["publish"].get("auto_draft", True):
             set_status(aid, "ready", "Sending draft to WordPress", step="uploading")
             try:
                 save_to_wp(aid, "draft")
@@ -422,17 +445,26 @@ def generate(aid: str) -> None:
 def event_payload(meta: dict) -> dict:
     a = meta.get("article") or {}
     src = meta["source"]
-    return {"id": meta["id"], "title": a.get("title") or src["title"], "source": src.get("source"), "source_id": src.get("source_id"),
+    return {"id": meta["id"], "website_id": meta.get("website_id") or (websites.default() or {}).get("id"),
+            "title": a.get("title") or src["title"], "source": src.get("source"), "source_id": src.get("source_id"),
             "category": src.get("category"), "excerpt": a.get("excerpt", src.get("excerpt", "")), "status": meta["status"],
             "seo": seo_score(meta)["score"] if a else 0}
 
 
-def seo_title(a: dict, source: str = "") -> str:
-    seo = cfg.load_settings()["seo"]
+def _site_name(site: dict | None) -> str:
+    """{site_name} in SEO templates: the website's domain, as before there were several websites."""
+    site = site or websites.default() or {}
+    url = websites.wp_config(site)[0] or site.get("url") or ""
+    return url.replace("https://", "").replace("http://", "").rstrip("/") or site.get("name", "")
+
+
+def seo_title(a: dict, source: str = "", site: dict | None = None) -> str:
+    """SEO title from the website's own template (one website's template is never used for another)."""
+    seo = cfg.load_settings(site or websites.default())["seo"]
     if not seo.get("auto_title", True):
         return ""
     t = cfg.render_user_prompt(seo.get("title_template") or "{title}", title=a["title"], source_name=source,
-                               year=datetime.now().year, site_name=app.WP_URL.replace("https://", "").replace("http://", ""),
+                               year=datetime.now().year, site_name=_site_name(site),
                                focus_keyword=a.get("focus_keyword", ""))
     if seo.get("add_source_name") and source and source not in t:
         t += f" | {source}"
@@ -441,12 +473,12 @@ def seo_title(a: dict, source: str = "") -> str:
     return t.strip()
 
 
-def seo_description(a: dict) -> str:
-    seo = cfg.load_settings()["seo"]
+def seo_description(a: dict, site: dict | None = None) -> str:
+    seo = cfg.load_settings(site or websites.default())["seo"]
     if not seo.get("auto_description", True):
         return ""
     return cfg.render_user_prompt(seo.get("description_template") or "{excerpt}", excerpt=a["excerpt"], title=a["title"],
-                                  site_name=app.WP_URL.replace("https://", "").replace("http://", ""),
+                                  site_name=_site_name(site),
                                   focus_keyword=a.get("focus_keyword", "")).strip()
 
 
@@ -487,11 +519,19 @@ def seo_score(meta: dict) -> dict:
 
 # ---------------------------------------------------------------- WordPress
 
-def wp_ready() -> bool:
-    return bool(app.WP_URL and app.WP_USER and app.WP_APP_PASSWORD)
+def wp_ready(site: dict | None = None) -> bool:
+    return websites.connected(site or websites.default())
 
 
-def _post_payload(wp: "app.WordPress", meta: dict, pub: dict) -> dict:
+def wp_client(site: dict | None) -> "app.WordPress":
+    """A WordPress client with this website's own credentials — never another website's."""
+    url, user, password = websites.wp_config(site)
+    if not (url and user and password):
+        raise RuntimeError(f"{(site or {}).get('name', 'This website')} is not connected to WordPress")
+    return app.WordPress(url, user, password)
+
+
+def _post_payload(wp: "app.WordPress", meta: dict, pub: dict, site: dict | None = None) -> dict:
     a = meta["article"]
     cats = list(a["categories"])
     if pub.get("default_category") and pub["default_category"] not in cats:
@@ -507,7 +547,7 @@ def _post_payload(wp: "app.WordPress", meta: dict, pub: dict) -> dict:
     if pub.get("featured_image", True):
         img = featured_image(meta["id"])
         if img and meta.get("wp_image_file") != img.name:
-            alt = cfg.render_user_prompt(cfg.load_settings()["seo"].get("alt_template") or "{title}", title=a["title"],
+            alt = cfg.render_user_prompt(cfg.load_settings(site)["seo"].get("alt_template") or "{title}", title=a["title"],
                                          focus_keyword=a.get("focus_keyword", ""))
             media = wp.upload_image(img, alt)
             meta["wp_media_id"], meta["wp_image_file"] = media["id"], img.name
@@ -516,14 +556,14 @@ def _post_payload(wp: "app.WordPress", meta: dict, pub: dict) -> dict:
     return payload
 
 
-def _rankmath(wp: "app.WordPress", post_id: int, a: dict, source: str = "") -> bool:
+def _rankmath(wp: "app.WordPress", post_id: int, a: dict, source: str = "", site: dict | None = None) -> bool:
     """Set Rank Math focus keyword / title / description. Returns False if the plugin API is unavailable."""
     meta = {"rank_math_focus_keyword": a["focus_keyword"]}
-    if seo_title(a, source):
-        meta["rank_math_title"] = seo_title(a, source)
-    if seo_description(a):
-        meta["rank_math_description"] = seo_description(a)
-    r = wp.session.post(f"{app.WP_URL}/wp-json/rankmath/v1/updateMeta", timeout=30,
+    if seo_title(a, source, site):
+        meta["rank_math_title"] = seo_title(a, source, site)
+    if seo_description(a, site):
+        meta["rank_math_description"] = seo_description(a, site)
+    r = wp.session.post(f"{wp.url}/wp-json/rankmath/v1/updateMeta", timeout=30,
                         json={"objectID": post_id, "objectType": "post", "meta": meta})
     return r.ok
 
@@ -531,9 +571,10 @@ def _rankmath(wp: "app.WordPress", post_id: int, a: dict, source: str = "") -> b
 def save_to_wp(aid: str, status: str, when: str | None = None) -> dict:
     """Create or update the WordPress post. status: draft | publish | future (with `when` ISO datetime)."""
     meta = load(aid)
-    pub = cfg.load_settings()["publish"]
-    wp = app.WordPress()
-    payload = _post_payload(wp, meta, pub)
+    site = websites.site_of(meta)   # the article's own website decides where it goes
+    pub = cfg.load_settings(site)["publish"]
+    wp = wp_client(site)
+    payload = _post_payload(wp, meta, pub, site)
     payload["status"] = status
     if status == "future" and when:
         payload["date"] = when
@@ -553,7 +594,7 @@ def save_to_wp(aid: str, status: str, when: str | None = None) -> dict:
                "draft": "Saved on WordPress as draft"}[status], "ok")
     if pub.get("rankmath_meta", True):
         try:
-            ok = _rankmath(wp, post["id"], meta["article"], meta["source"].get("source", ""))
+            ok = _rankmath(wp, post["id"], meta["article"], meta["source"].get("source", ""), site)
             log(meta, "Rank Math SEO meta updated" if ok else "Rank Math API not available – set the focus keyword in WordPress", "ok" if ok else "err")
         except requests.RequestException as e:
             log(meta, f"Rank Math update failed: {e}", "err")
@@ -565,14 +606,15 @@ def save_to_wp(aid: str, status: str, when: str | None = None) -> dict:
     return meta
 
 
-def wp_info() -> dict:
-    """Connection card data: site name, counts, WordPress version (best effort)."""
-    if not wp_ready():
+def wp_info(site: dict | None = None) -> dict:
+    """Connection card data of one website: site name, counts, WordPress version (best effort)."""
+    site = site or websites.default()
+    if not wp_ready(site):
         return {"connected": False}
-    wp = app.WordPress()
-    out = {"connected": True, "url": app.WP_URL}
+    wp = wp_client(site)
+    out = {"connected": True, "url": wp.url}
     try:
-        root = wp.session.get(f"{app.WP_URL}/wp-json/", timeout=30).json()
+        root = wp.session.get(f"{wp.url}/wp-json/", timeout=30).json()
         out["name"] = root.get("name", "")
         out["rankmath"] = any(ns.startswith("rankmath") for ns in root.get("namespaces", []))
     except Exception:
@@ -591,7 +633,7 @@ def wp_info() -> dict:
     except Exception as e:
         out["error"] = str(e)[:200]
     try:
-        home = requests.get(app.WP_URL, headers=UA, timeout=20).text
+        home = requests.get(wp.url, headers=UA, timeout=20).text
         m = re.search(r'name="generator" content="WordPress ([\d.]+)', home)
         out["version"] = m.group(1) if m else ""
     except requests.RequestException:
@@ -599,16 +641,17 @@ def wp_info() -> dict:
     return out
 
 
-def wp_lists() -> dict:
-    """Authors + categories for the default-settings form."""
-    if not wp_ready():
+def wp_lists(site: dict | None = None) -> dict:
+    """Authors + categories of one website, for its default-settings form."""
+    site = site or websites.default()
+    if not wp_ready(site):
         return {"authors": [], "categories": []}
-    wp = app.WordPress()
+    wp = wp_client(site)
     try:
         users = wp.session.get(f"{wp.api}/users", params={"per_page": 100, "context": "edit", "_fields": "id,name"}, timeout=30).json()
     except Exception:
         users = []
-    cats, _ = _catalog()
+    cats, _ = _catalog(site)
     return {"authors": [{"id": u["id"], "name": u["name"]} for u in users if isinstance(u, dict)], "categories": cats}
 
 
@@ -678,12 +721,32 @@ def _save_titles(data: dict) -> dict:
     return data
 
 
-def refresh_titles() -> dict:
-    items, errors, stats = sources.fetch_all()
-    old = load_titles().get("stats", {})
-    old.update(stats)
-    return _save_titles({"fetched_at": datetime.now().isoformat(timespec="seconds"), "items": items,
-                         "errors": errors, "stats": old})
+def _mark_seen(items: list[dict], before: list[dict]) -> None:
+    """When a scan first found each news item (Discover lists the newest first)."""
+    seen, now = {i["url"]: i.get("seen") for i in before}, datetime.now().isoformat(timespec="seconds")
+    for i in items:
+        i["seen"] = seen.get(i["url"]) or now
+
+
+def refresh_titles(only: list[dict] | None = None) -> dict:
+    """Scan every enabled source, or only the given ones (one website's): the other sources' news is kept."""
+    if only is None:
+        items, errors, stats = sources.fetch_all()
+        _mark_seen(items, load_titles()["items"])
+        old = load_titles().get("stats", {})
+        old.update(stats)
+        return _save_titles({"fetched_at": datetime.now().isoformat(timespec="seconds"), "items": items,
+                             "errors": errors, "stats": old})
+    items, errors, stats = sources.fetch_all(only)
+    data = load_titles()
+    _mark_seen(items, data["items"])
+    ids, names = {s["id"] for s in only}, {s["name"] for s in only}
+    data["items"] = [i for i in data["items"] if i.get("source_id") not in ids] + items
+    data["items"].sort(key=lambda i: i.get("date", ""), reverse=True)
+    data["errors"] = {k: v for k, v in (data.get("errors") or {}).items() if k not in names} | errors
+    data.setdefault("stats", {}).update(stats)
+    data["fetched_at"] = data.get("fetched_at") or datetime.now().isoformat(timespec="seconds")
+    return _save_titles(data)
 
 
 def refresh_one_source(src: dict) -> dict:
@@ -691,6 +754,7 @@ def refresh_one_source(src: dict) -> dict:
     stats = data.setdefault("stats", {})
     try:
         found = sources.fetch_source(src)
+        _mark_seen(found, data["items"])
         stats[src["id"]] = {"count": len(found), "error": "", "checked": datetime.now().isoformat(timespec="seconds")}
         data["errors"].pop(src["name"], None)
     except Exception as e:

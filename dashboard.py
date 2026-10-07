@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 
 import requests
 from dotenv import set_key
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import Flask, abort, g, jsonify, render_template, request, send_file
 
 import logging
 import re
@@ -26,6 +26,7 @@ import automation
 import ca
 import settings as cfg
 import similar
+import websites
 
 log = logging.getLogger("currentflow")
 AID_RE = re.compile(r"^\d{8}-\d{6}-[a-f0-9]{4}$")
@@ -34,6 +35,20 @@ SID_RE = re.compile(r"^[a-f0-9]{8}$")
 server = Flask(__name__)
 server.config["TEMPLATES_AUTO_RELOAD"] = True
 server.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+# multi-website: on the first start the existing WordPress connection (.env) becomes the default website and every
+# existing article and automation rule is assigned to it (rules that only scan sources stay shared by all websites)
+_default_site = websites.ensure_default(cfg.default_template()["id"], niche=ca.app.SITE_NICHE)
+websites.fix_sources([s["id"] for s in ca.sources.load_sources()])
+_tpls = cfg.load_templates()
+if any(not t.get("website_id") for t in _tpls):
+    for _t in _tpls:
+        _t["website_id"] = _t.get("website_id") or _default_site["id"]
+    cfg.save_templates(_tpls)
+_rules = automation.load_rules()
+if any("website_id" not in r for r in _rules):
+    for _r in _rules:
+        _r.setdefault("website_id", "" if _r.get("action") == "fetch" else _default_site["id"])
+    automation.save_rules(_rules)
 worker = ca.Worker()
 
 
@@ -60,6 +75,68 @@ def cached(key: str, ttl: int, fn):
     return val
 
 
+# ---------------------------------------------------------------- website context
+# The dashboard sends the selected website in the X-Website header ("all" / empty = All Websites). The server checks it
+# and scopes every website-dependent query to it: an article, setting, template, rule or WordPress connection of
+# website A is never read, changed or used while website B is selected. (Downloads pass it as ?website=.)
+
+@server.before_request
+def _website_context():
+    wid = (request.headers.get("X-Website") or request.args.get("website") or "").strip()
+    g.site = None
+    if wid and wid != "all":
+        site = websites.get(wid)
+        if not site:
+            return error("This website does not exist any more. Pick one in the website selector.", 404)
+        g.site = site
+    activity.current_website.set(g.site["id"] if g.site else "")
+
+
+def ctx_site() -> dict | None:
+    """The website selected in the dashboard, or None for All Websites."""
+    return getattr(g, "site", None)
+
+
+def site_id_of(m: dict) -> str:
+    return m.get("website_id") or (websites.default() or {}).get("id", "")
+
+
+def in_ctx(m: dict) -> bool:
+    s = ctx_site()
+    return s is None or site_id_of(m) == s["id"]
+
+
+def ctx_articles() -> list[dict]:
+    return [m for m in ca.all_articles() if in_ctx(m)]
+
+
+def load_ctx_article(aid: str) -> dict:
+    """An article of the selected website (another website's article does not exist in this context)."""
+    safe_aid(aid)
+    try:
+        m = ca.load(aid)
+    except FileNotFoundError:
+        abort(404)
+    if not in_ctx(m):
+        abort(404)
+    return m
+
+
+def fits_ctx(item: dict) -> bool:
+    """A discovered title belongs to the selected website when it fits its sources and niche."""
+    s = ctx_site()
+    return s is None or websites.relevance(item, s) >= websites.threshold(s)
+
+
+NEED_SITE = "Select a website in the top bar first."
+
+
+def ctx_owns(source_id: str) -> bool:
+    """A news source is visible in the selected website only when it is one of that website's own sources."""
+    s = ctx_site()
+    return s is None or websites.owns(s, source_id)
+
+
 def approved_at(m: dict) -> str:
     """When the article was last approved (by a reviewer or an automation rule), taken from its log."""
     return next((e["t"] for e in reversed(m.get("log", [])) if e.get("msg", "").startswith("Approved by")), "")
@@ -69,7 +146,7 @@ def summary(m: dict) -> dict:
     a = m.get("article") or {}
     seo = ca.seo_score(m) if a else {"score": 0, "words": 0, "reading_min": 0, "checks": []}
     return {
-        "id": m["id"], "status": m["status"], "step": m.get("step", ""),
+        "id": m["id"], "website_id": site_id_of(m), "status": m["status"], "step": m.get("step", ""),
         "title": a.get("title") or m["source"]["title"], "source": m["source"],
         "created": m["created"], "updated": m.get("updated", ""), "started": m.get("started", ""),
         "finished": m.get("finished", ""), "seconds": m.get("seconds"),
@@ -140,18 +217,24 @@ def index():
 
 @server.get("/api/state")
 def state():
-    items = ca.all_articles()
+    site = ctx_site()
+    items = ctx_articles()
     titles = ca.load_titles()
+    gone = websites.hidden_urls(site["id"] if site else "")
+    tits = [t for t in titles["items"] if fits_ctx(t) and t["url"] not in gone]
     today = date.today().isoformat()
     yesterday = (date.today() - timedelta(days=1)).isoformat()
-    srcs = ca.sources.load_sources()
+    srcs = [s for s in ca.sources.load_sources() if ctx_owns(s["id"])]
     return jsonify(
-        wp_ready=ca.wp_ready(), wp_url=ca.app.WP_URL, today=today, counts=counts(items),
+        wp_ready=ca.wp_ready(site) if site else any(websites.connected(w) for w in websites.active()),
+        wp_url=websites.wp_config(site)[0] if site else "", today=today, counts=counts(items),
+        website=websites.public(site) if site else None, websites_total=len(websites.load()),
         sources_total=len(srcs), sources_active=sum(1 for s in srcs if s.get("enabled", True)),
         sources_errors=sum(1 for s in srcs if s.get("enabled", True) and titles.get("stats", {}).get(s["id"], {}).get("error")),
-        titles_total=len(titles["items"]), titles_today=sum(1 for t in titles["items"] if t.get("date") == today),
-        titles_yesterday=sum(1 for t in titles["items"] if t.get("date") == yesterday),
-        fetched_at=titles.get("fetched_at"),
+        titles_total=len(tits), titles_today=sum(1 for t in tits if t.get("date") == today),
+        titles_yesterday=sum(1 for t in tits if t.get("date") == yesterday),
+        fetched_at=(titles.get("fetched_at") if site is None
+                    else max((titles.get("stats", {}).get(s["id"], {}).get("checked") or "" for s in srcs), default="") or None),
         published_today=sum(1 for m in items if (m.get("published_at") or "").startswith(today)),
         published_yesterday=sum(1 for m in items if (m.get("published_at") or "").startswith(yesterday)),
         storage_bytes=ca.storage_bytes(), writers=cfg.load_settings().get("writers", 2),
@@ -163,7 +246,7 @@ def state():
 @server.get("/api/notifications")
 def notifications():
     events = []
-    for m in ca.all_articles()[:60]:
+    for m in ctx_articles()[:60]:
         for e in m.get("log", []):
             if e["level"] in ("ok", "err"):
                 events.append({"t": e["t"], "msg": e["msg"], "level": e["level"], "id": m["id"],
@@ -177,36 +260,77 @@ def notifications():
 @server.get("/api/titles")
 def titles():
     data = ca.load_titles()
-    used = ca.used_urls()
+    site, act = ctx_site(), websites.active()
+    if site:   # another website's sources (and their news, errors and numbers) do not exist here
+        names = {s["name"] for s in ca.sources.load_sources() if websites.owns(site, s["id"])}
+        data["items"] = [i for i in data["items"] if websites.owns(site, i.get("source_id"))]
+        data["errors"] = {k: v for k, v in (data.get("errors") or {}).items() if k in names}
+        data["stats"] = {k: v for k, v in (data.get("stats") or {}).items() if websites.owns(site, k)}
+    if not site:   # the same address read for two websites is one news item here
+        seen_urls = set()
+        data["items"] = [i for i in data["items"] if not (i["url"] in seen_urls or seen_urls.add(i["url"]))]
+    used = ca.used_by(site["id"] if site else "")
     groups = similar.groups(data["items"]) if cfg.load_settings()["app"].get("combine_sources", True) else {}
-    lead_of = {i["url"]: lead for lead, g in groups.items() for i in g}
+    lead_of = {i["url"]: lead for lead, grp in groups.items() for i in grp}
+    score = {(it["url"], w["id"]): websites.relevance(it, w) for it in data["items"] for w in act}
     for it in data["items"]:
-        it["article_id"] = used.get(it["url"])
         lead = lead_of.get(it["url"])
+        members = groups[lead] if lead else [it]
+        # written already (from any source of the story) -> by which article and for which website
+        ref = next((used[o["url"]] for o in [it] + members if o["url"] in used), None)
+        it["article_id"], it["used_by"] = (ref["id"], ref["website_id"]) if ref else (None, "")
+        # niche relevance per website (a story counts with its best source); "fits" = websites at/above their threshold
+        best = {w["id"]: max(score[(o["url"], w["id"])] for o in members) for w in act}
+        it["fits"] = [w["id"] for w in act if best[w["id"]] >= websites.threshold(w)]
+        if site:
+            it["relevance"] = best.get(site["id"], 0)
         if lead:   # same story on several sources: Discover shows the lead row with the others listed under it
             it["group"] = lead
             it["also"] = [{"source": o["source"], "title": o["title"], "url": o["url"], "date": o.get("date", "")} for o in groups[lead] if o["url"] != it["url"]]
-            # already written from any of its sources -> the whole story counts as done (no duplicate article)
-            it["article_id"] = it["article_id"] or next((used[o["url"]] for o in groups[lead] if o["url"] in used), None)
+    gone = websites.hidden_urls(site["id"] if site else "")
+    if gone:   # deleted news never comes back, not even from another source of the same story
+        data["items"] = [it for it in data["items"]
+                         if not any(o["url"] in gone for o in (groups[lead_of[it["url"]]] if it["url"] in lead_of else [it]))]
+    if site:
+        data["threshold"] = websites.threshold(site)
     return jsonify(data)
 
 
-def do_scan(user: str = "You") -> dict:
+@server.post("/api/titles/hide")
+def hide_titles():
+    """Delete news from Discover: never listed again for the selected website (All Websites: for every website)."""
+    news = []
+    for i in (request.json or {}).get("items") or []:
+        news += [{"url": u, "title": i.get("title", "")} for u in [i.get("url")] + list(i.get("also") or [])]
+    news = [n for n in news if str(n["url"] or "").startswith(("http://", "https://"))]
+    site = ctx_site()
+    websites.hide_news(site["id"] if site else "", news)
+    activity.log("News deleted from Discover", "Sources", ", ".join(n["title"] for n in news)[:300] or f"{len(news)} news")
+    return jsonify(ok=True, hidden=len(news))
+
+
+def do_scan(user: str = "You", site: dict | None = None) -> dict:
+    """Scan one website's own sources, or every source (All Websites and the shared automation rule)."""
+    own = [s for s in ca.sources.load_sources() if websites.owns(site, s["id"])] if site else None
     before = {i["url"] for i in ca.load_titles()["items"]}
-    data = ca.refresh_titles()
-    new = [i for i in data["items"] if i["url"] not in before]
-    activity.log("Scanned sources", "Sources", f"{len(data['items'])} titles, {len(new)} new, {len(data['errors'])} errors",
-                 "failed" if data["errors"] and not data["items"] else "success", user=user)
+    data = ca.refresh_titles(own)
+    mine = [i for i in data["items"] if not site or websites.owns(site, i.get("source_id"))]
+    errs = [k for k in data["errors"] if own is None or k in {s["name"] for s in own}]
+    new = [i for i in mine if i["url"] not in before]
+    activity.log("Scanned sources", "Sources", f"{len(mine)} titles, {len(new)} new, {len(errs)} errors",
+                 "failed" if errs and not mine else "success", user=user)
     used = ca.used_urls()
+    groups = similar.groups(data["items"]) if cfg.load_settings()["app"].get("combine_sources", True) else {}
+    story = {i["url"]: [o["url"] for o in grp] for grp in groups.values() for i in grp}
     for it in new:
-        if it["url"] not in used:
-            automation.fire("new_article", it)
+        if it["url"] not in used:   # story_urls: every source of the same story (a deleted story stays deleted)
+            automation.fire("new_article", it | {"story_urls": story.get(it["url"], [it["url"]])})
     return data
 
 
 @server.post("/api/titles/refresh")
 def refresh_titles():
-    do_scan()
+    do_scan(site=ctx_site())
     return titles()
 
 
@@ -233,10 +357,13 @@ def preview():
 _select_lock = threading.Lock()   # automation rules may select from several threads at once
 
 
-def select_items(items: list[dict], user: str = "You") -> list[str]:
+def select_items(items: list[dict], user: str = "You", website_id: str = "", force: bool = False) -> list[str]:
+    """Create articles for one website. One source story -> one primary website: news already written for another
+    website is skipped unless force (an explicit admin decision to write it for this website too)."""
+    website_id = website_id or (websites.default() or {}).get("id", "")
     with _select_lock:
         all_titles = ca.load_titles()["items"]
-        used = ca.used_urls()
+        used = ca.used_by(website_id)
         known = {i["url"]: i for i in all_titles}
         combine = cfg.load_settings()["app"].get("combine_sources", True)
         ids = []
@@ -244,21 +371,18 @@ def select_items(items: list[dict], user: str = "You") -> list[str]:
             if item.get("url") not in known and item.get("url") not in used:
                 continue  # ignore urls that did not come from a scan
             item = known.get(item["url"], item)
-            if item["url"] in used:
-                ids.append(used[item["url"]])
-                continue
-            # the same story on other sources (not already written) is combined into this article
+            # the same story on other sources is combined into this article
             group = similar.group_of(item["url"], all_titles) if combine else []
-            done = next((used[g["url"]] for g in group if g["url"] in used), None)
-            if done:   # this story was already written from another source
-                ids.append(done)
+            done = next((used[g["url"]] for g in [item] + group if g["url"] in used), None)
+            if done and (done["website_id"] == website_id or not force):
+                ids.append(done["id"])   # already written (for this website, or for another one without force)
                 continue
             if group and item["url"] != group[0]["url"]:
                 item = group[0]   # the official / lead source becomes the main one
             related = [g for g in group if g["url"] != item["url"]]
-            m = ca.create_selection(item, related)
+            m = ca.create_selection(item, related, website_id)
             for u in [item["url"]] + [r["url"] for r in related]:
-                used[u] = m["id"]
+                used[u] = {"id": m["id"], "website_id": website_id}
             ids.append(m["id"])
             activity.log("Article selected", "Articles", item["title"] + (f" (+{len(related)} more sources)" if related else ""), user=user, article_id=m["id"])
             if cfg.load_settings()["app"].get("auto_extract", True):
@@ -275,10 +399,15 @@ def _safe_extract(aid):
 
 @server.post("/api/select")
 def select():
-    ids = select_items(request.json.get("items", []))
-    if request.json.get("process"):
+    d = request.json or {}
+    site = ctx_site() or websites.get(d.get("website_id"))   # All Websites mode: the dashboard asks which website
+    if not site or site.get("status") == "inactive":
+        return error(NEED_SITE if not site else f"{site['name']} is deactivated.")
+    ids = select_items(d.get("items", []), website_id=site["id"], force=bool(d.get("force")))
+    if d.get("process"):
         for aid in ids:
-            if ca.load(aid)["status"] not in ca.WORKING:
+            m = ca.load(aid)
+            if m["status"] not in ca.WORKING and site_id_of(m) == site["id"] and not m.get("article"):
                 ca.set_status(aid, "queued", "Queued for Claude AI", step="")
                 worker.add(aid)
     return jsonify(ids=ids)
@@ -288,17 +417,13 @@ def select():
 
 @server.get("/api/articles")
 def articles():
-    items = ca.all_articles()
+    items = ctx_articles()
     return jsonify(items=[summary(m) for m in items], counts=counts(items))
 
 
 @server.get("/api/articles/<aid>")
 def article(aid):
-    safe_aid(aid)
-    try:
-        m = ca.load(aid)
-    except FileNotFoundError:
-        abort(404)
+    m = load_ctx_article(aid)
     return jsonify(summary(m) | {"article": m.get("article"), "source_text": m.get("source_text", ""),
                                  "related": m.get("related", []), "related_texts": m.get("related_texts", []),
                                  "source_image": m.get("source_image", ""), "log": m.get("log", []),
@@ -307,8 +432,7 @@ def article(aid):
 
 @server.post("/api/articles/<aid>/edit")
 def edit(aid):
-    safe_aid(aid)
-    m = ca.load(aid)
+    m = load_ctx_article(aid)
     d = request.json
     if "notes" in d:
         m["notes"] = d["notes"]
@@ -329,7 +453,7 @@ def edit(aid):
 
 @server.post("/api/articles/<aid>/image")
 def upload_image(aid):
-    safe_aid(aid)
+    load_ctx_article(aid)
     f = request.files.get("image")
     if not f or not f.filename:
         return error("No image received")
@@ -351,8 +475,12 @@ def bulk():
         if not AID_RE.match(str(aid)):
             failed.append({"id": aid, "error": "Invalid article id"})
             continue
+        mine = False
         try:
             m = ca.load(aid)
+            if not in_ctx(m):
+                raise RuntimeError("This article belongs to another website")
+            mine = True
             st = m["status"]
             if action == "extract":
                 if st in ("selected", "error") or not m.get("source_text"):
@@ -386,13 +514,16 @@ def bulk():
             elif action in ("publish", "draft", "schedule"):
                 if not m.get("article"):
                     raise RuntimeError("Article is not written yet")
-                if not ca.wp_ready():
-                    raise RuntimeError("WordPress is not connected")
+                site = websites.site_of(m)   # always the article's own website
+                if not ca.wp_ready(site):
+                    raise RuntimeError(f"{(site or {}).get('name', 'This website')} is not connected to WordPress")
                 if action == "schedule":
                     ca.save_to_wp(aid, "future", d.get("when"))
                 else:
                     ca.save_to_wp(aid, "publish" if action == "publish" else "draft")
             elif action == "delete":
+                if m.get("wp_id") or m["status"] in ("published", "scheduled"):
+                    websites.hide_news(site_id_of(m), [m["source"]] + m.get("related", []))
                 worker.remove(aid)
                 shutil.rmtree(ca.CA_DIR / aid)
                 activity.log("Article removed", "Articles", (m.get("article") or m["source"])["title"], article_id=aid)
@@ -401,7 +532,7 @@ def bulk():
             done.append(aid)
         except Exception as e:
             failed.append({"id": aid, "error": str(e)[:300]})
-            if action in ("publish", "draft", "schedule"):
+            if mine and action in ("publish", "draft", "schedule"):
                 note_publish_error(aid, str(e))
     return jsonify(done=done, failed=failed)
 
@@ -438,9 +569,10 @@ def _source_view(s: dict, stats: dict, items: list[dict]) -> dict:
 
 @server.get("/api/sources")
 def list_sources():
-    t = ca.load_titles()
-    return jsonify(items=[_source_view(s, t.get("stats", {}), t["items"]) for s in ca.sources.load_sources()],
-                   categories=ca.sources.CATEGORIES)
+    t, sites = ca.load_titles(), websites.load()
+    items = [_source_view(s, t.get("stats", {}), t["items"]) | {"websites": [w["id"] for w in sites if websites.owns(w, s["id"])]}
+             for s in ca.sources.load_sources() if ctx_owns(s["id"])]
+    return jsonify(items=items, categories=ca.sources.CATEGORIES)
 
 
 @server.post("/api/sources/detect")
@@ -451,11 +583,25 @@ def detect_source():
         return error(str(e)[:300])
 
 
+def _norm_url(url: str | None) -> str:
+    return re.sub(r"^https?://(www\.)?", "", (url or "").strip()).rstrip("/").lower()
+
+
 @server.post("/api/sources")
 def add_source():
     d = request.json
+    site = ctx_site()
+    if not site:
+        return error(NEED_SITE + " A new source belongs to that website.")
     if not d.get("name") or not d.get("url"):
         return error("Source name and website URL are required")
+    same = next((s for s in ca.sources.load_sources() if _norm_url(s.get("site")) == _norm_url(d["url"])), None)
+    if same:   # already scanned for another website: share it instead of scanning the same site twice
+        if websites.owns(site, same["id"]):
+            return error(f"{same['name']} is already one of {site['name']}'s sources")
+        websites.set_source(site["id"], same["id"], True, [s["id"] for s in ca.sources.load_sources()])
+        activity.log("New source added", "Sources", same["name"])
+        return jsonify(same)
     try:
         det = d.get("detected") or ca.sources.detect(d["url"])
     except Exception as e:
@@ -463,6 +609,7 @@ def add_source():
     src = ca.sources.add_source(d["name"], det["kind"], det["config"], site=d["url"],
                                 category=d.get("category", "General"), description=d.get("description", ""),
                                 frequency=d.get("frequency", "manual"), section=d.get("section", ""))
+    websites.set_source(site["id"], src["id"], True, [s["id"] for s in ca.sources.load_sources()])   # this website only
     threading.Thread(target=ca.refresh_one_source, args=(src,), daemon=True).start()
     activity.log("New source added", "Sources", src["name"])
     return jsonify(src)
@@ -470,9 +617,18 @@ def add_source():
 
 @server.patch("/api/sources/<sid>")
 def update_source(sid):
-    if not SID_RE.match(sid or ""):
+    if not SID_RE.match(sid or "") or not ctx_owns(sid):
         abort(404)
     d = dict(request.json)
+    site, copied = ctx_site(), None
+    if site and len(websites.users_of(sid)) > 1:
+        cur = next(s for s in ca.sources.load_sources() if s["id"] == sid)
+        copied = ca.sources.add_source(cur["name"], cur["kind"], cur["config"],
+                                       **{k: cur[k] for k in ca.sources.EDITABLE if k in cur and k != "name"})
+        ids = [s["id"] for s in ca.sources.load_sources()]
+        websites.set_source(site["id"], sid, False, ids)
+        websites.set_source(site["id"], copied["id"], True, ids)
+        sid = copied["id"]
     if d.get("url"):
         current = next((s for s in ca.sources.load_sources() if s["id"] == sid), None)
         if current and d["url"].rstrip("/") != (current.get("site") or "").rstrip("/"):
@@ -483,24 +639,32 @@ def update_source(sid):
                 return error(str(e)[:300])
         d["site"] = d.pop("url")
     try:
-        return jsonify(ca.sources.update_source(sid, **d))
+        src = ca.sources.update_source(sid, **d)
     except KeyError:
         abort(404)
+    if copied and src.get("enabled", True):
+        threading.Thread(target=ca.refresh_one_source, args=(src,), daemon=True).start()
+    return jsonify(src)
 
 
 @server.delete("/api/sources/<sid>")
 def delete_source(sid):
-    if not SID_RE.match(sid or ""):
+    if not SID_RE.match(sid or "") or not ctx_owns(sid):
         abort(404)
     name = next((s["name"] for s in ca.sources.load_sources() if s["id"] == sid), sid)
-    ca.sources.remove_source(sid)
+    site = ctx_site()
+    if site:
+        websites.set_source(site["id"], sid, False, [s["id"] for s in ca.sources.load_sources()])
+    if not site or not websites.users_of(sid):
+        ca.sources.remove_source(sid)
+        websites.drop_source(sid)
     activity.log("Source removed", "Sources", name)
     return jsonify(ok=True)
 
 
 @server.post("/api/sources/<sid>/scan")
 def scan_source(sid):
-    if not SID_RE.match(sid or ""):
+    if not SID_RE.match(sid or "") or not ctx_owns(sid):
         abort(404)
     src = next((s for s in ca.sources.load_sources() if s["id"] == sid), None)
     if not src:
@@ -513,22 +677,37 @@ def scan_source(sid):
 
 @server.get("/api/settings")
 def get_settings():
-    return jsonify(cfg.load_settings())
+    site = ctx_site()
+    return jsonify(cfg.load_settings(site) | {"_website": site["id"] if site else "", "_site_sections": list(websites.SITE_SECTIONS)})
 
 
 @server.post("/api/settings")
 def post_settings():
-    out = cfg.save_settings(request.json or {})
+    """With a website selected, its publishing / SEO / content / structure settings are saved for that website only;
+    everything else (and everything in All Websites mode) is a global setting."""
+    d, site = request.json or {}, ctx_site()
+    if site:
+        own = {k: v for k, v in d.items() if k in websites.SITE_SECTIONS}
+        if own:
+            websites.save_settings(site["id"], own)
+        d = {k: v for k, v in d.items() if k not in websites.SITE_SECTIONS}
+    if d:
+        cfg.save_settings(d)
     activity.log("Settings saved", "Settings", ", ".join((request.json or {}).keys()))
-    return jsonify(out)
+    return get_settings()
 
 
 @server.post("/api/settings/reset")
 def reset_settings():
+    site = ctx_site()
+    if site:   # only this website's own settings go back to the global defaults
+        websites.reset_settings(site["id"])
+        activity.log("Website settings reset to defaults", "Settings", site["name"])
+        return get_settings()
     if cfg.SETTINGS_FILE.exists():
         cfg.SETTINGS_FILE.unlink()
     activity.log("Settings reset to defaults", "Settings")
-    return jsonify(cfg.load_settings())
+    return get_settings()
 
 
 @server.post("/api/cache/clear")
@@ -544,16 +723,33 @@ def clear_cache():
 
 @server.get("/api/templates")
 def get_templates():
-    return jsonify(items=cfg.load_templates())
+    """The selected website's templates (plus shared ones); "default" marks the one its articles use."""
+    site = ctx_site()
+    items = cfg.templates_for(site)
+    if site:
+        own = cfg.get_template(None, site)["id"]
+        items = [t | {"default": t["id"] == own} for t in items]
+    return jsonify(items=items)
 
 
 @server.post("/api/templates")
 def post_template():
-    return jsonify(cfg.upsert_template(request.json or {}))
+    d, site = request.json or {}, ctx_site()
+    if site and d.get("id") and not any(t["id"] == d["id"] for t in cfg.templates_for(site)):
+        abort(404)
+    tpl = cfg.upsert_template(d, site["id"] if site else None)
+    if site and d.get("default"):
+        websites.upsert({"id": site["id"], "template_id": tpl["id"]})
+    return jsonify(tpl)
 
 
 @server.delete("/api/templates/<tid>")
 def delete_template(tid):
+    site = ctx_site()
+    if site and not any(t["id"] == tid for t in cfg.templates_for(site)):
+        abort(404)
+    if any(w.get("template_id") == tid for w in websites.load()):
+        return error("A website uses this template as its default. Pick another default first.")
     try:
         cfg.delete_template(tid)
     except ValueError as e:
@@ -569,7 +765,8 @@ def test_template():
     item = d.get("item") or {}
     if not item.get("url"):
         return error("Pick a news item to test with")
-    meta = {"id": "test", "source": {k: item.get(k, "") for k in ("title", "url", "source", "date", "category")}}
+    meta = {"id": "test", "website_id": (ctx_site() or websites.default() or {}).get("id", ""),
+            "source": {k: item.get(k, "") for k in ("title", "url", "source", "date", "category")}}
     try:
         src = ca.fetch_source(item["url"])
         meta["source_text"] = src["text"]
@@ -582,7 +779,7 @@ def test_template():
 
 @server.get("/api/stats/claude")
 def claude_stats():
-    items = [m for m in ca.all_articles() if m.get("article")]
+    items = [m for m in ctx_articles() if m.get("article")]
     month = date.today().strftime("%Y-%m")
     scores = [ca.seo_score(m)["score"] for m in items]
     secs = [m["seconds"] for m in items if m.get("seconds")]
@@ -590,61 +787,171 @@ def claude_stats():
                    avg_seo=round(sum(scores) / len(scores)) if scores else 0,
                    avg_seconds=round(sum(secs) / len(secs)) if secs else 0,
                    sample=[{"title": t["title"], "url": t["url"], "source": t["source"], "date": t.get("date", ""),
-                            "category": t.get("category", "")} for t in ca.load_titles()["items"][:40]])
+                            "category": t.get("category", "")} for t in ca.load_titles()["items"] if fits_ctx(t)][:40])
 
 
 # ---------------------------------------------------------------- WordPress
 
 @server.get("/api/wordpress")
 def wordpress():
-    info = cached("wp_info", 120, ca.wp_info)
-    return jsonify(info | {"user_login": ca.app.WP_USER, "has_password": bool(ca.app.WP_APP_PASSWORD)})
+    site = ctx_site()
+    if not site:   # All Websites: a summary of every connection
+        act = websites.active()
+        return jsonify(connected=any(websites.connected(w) for w in act), all_websites=True,
+                       name=f"{len(act)} website{'s' if len(act) != 1 else ''}", url="",
+                       websites=[{"id": w["id"], "name": w["name"], "connected": websites.connected(w)} for w in act])
+    info = cached(f"wp_info:{site['id']}", 120, lambda: ca.wp_info(site))
+    url, user, password = websites.wp_config(site)
+    return jsonify(info | {"user_login": user, "has_password": bool(password), "url": info.get("url") or url})
 
 
 @server.get("/api/wordpress/lists")
 def wordpress_lists():
-    return jsonify(cached("wp_lists", 600, ca.wp_lists))
+    site = ctx_site()
+    if not site:
+        return jsonify(authors=[], categories=[])
+    return jsonify(cached(f"wp_lists:{site['id']}", 600, lambda: ca.wp_lists(site)))
 
 
-@server.post("/api/wordpress/connect")
-def wp_connect():
-    d = request.json
-    url = (d.get("url") or "").strip().rstrip("/")
-    user = (d.get("user") or "").strip()
-    password = (d.get("password") or "").strip() or ca.app.WP_APP_PASSWORD
-    if not (url and user and password):
-        return error("Site URL, username and application password are all required")
+def _check_wp(url: str, user: str, password: str):
+    """Log in to WordPress once; returns (name, None) or (None, error message)."""
     try:
         r = requests.get(f"{url}/wp-json/wp/v2/users/me", auth=(user, password), timeout=30,
                          headers={"User-Agent": "wp-article-automation/1.0"})
     except requests.RequestException as e:
-        return error(f"Could not reach the site: {e}"[:300])
+        return None, f"Could not reach the site: {e}"[:300]
     if r.status_code in (401, 403):
-        return error("WordPress rejected the login. Check the username and application password.")
+        return None, "WordPress rejected the login. Check the username and application password."
     if r.status_code == 404 or "json" not in r.headers.get("content-type", ""):
-        return error("WordPress REST API was not found at this URL.")
+        return None, "WordPress REST API was not found at this URL."
     if not r.ok:
-        return error(f"WordPress returned HTTP {r.status_code}")
-    if not ENV_FILE.exists():
-        ENV_FILE.write_text("")
-    for key, value in (("WP_URL", url), ("WP_USER", user), ("WP_APP_PASSWORD", password)):
-        set_key(str(ENV_FILE), key, value, quote_mode="never")
-    ca.app.WP_URL, ca.app.WP_USER, ca.app.WP_APP_PASSWORD = url, user, password
-    ca._catalog_cache.clear()
-    _cache.clear()
-    activity.log("WordPress connected", "WordPress", url)
-    return jsonify(ok=True, name=r.json().get("name", user), url=url)
+        return None, f"WordPress returned HTTP {r.status_code}"
+    return r.json().get("name", user), None
+
+
+def _connect_site(site: dict, url: str, user: str, password: str):
+    """Save a checked WordPress connection for this website only (its password in .env under its own key)."""
+    name, err = _check_wp(url, user, password)
+    if err:
+        return None, err
+    websites.set_wp(site["id"], url, user, password)
+    if site.get("is_default"):   # keep the old single-site .env keys in step (used by the app.py command line)
+        for key, value in (("WP_URL", url), ("WP_USER", user)):
+            set_key(str(ENV_FILE), key, value, quote_mode="never")
+        ca.app.WP_URL, ca.app.WP_USER, ca.app.WP_APP_PASSWORD = url, user, password
+    ca._catalog_cache.pop(site["id"], None)
+    for k in [k for k in _cache if k.startswith(("wp_info", "wp_lists"))]:
+        _cache.pop(k, None)
+    activity.log("WordPress connected", "WordPress", f"{site['name']}: {url}", website_id=site["id"])
+    return name, None
+
+
+@server.post("/api/wordpress/connect")
+def wp_connect():
+    site = ctx_site()
+    if not site:
+        return error(NEED_SITE)
+    d = request.json
+    url = (d.get("url") or "").strip().rstrip("/")
+    user = (d.get("user") or "").strip()
+    password = (d.get("password") or "").strip() or websites.wp_config(site)[2]
+    if not (url and user and password):
+        return error("Site URL, username and application password are all required")
+    name, err = _connect_site(site, url, user, password)
+    if err:
+        return error(err)
+    return jsonify(ok=True, name=name, url=url)
 
 
 @server.post("/api/wordpress/test")
 def wp_test():
-    _cache.pop("wp_info", None)
-    info = ca.wp_info()
+    site = ctx_site()
+    if not site:
+        return error(NEED_SITE)
+    _cache.pop(f"wp_info:{site['id']}", None)
+    info = ca.wp_info(site)
     if not info.get("connected"):
         return error("WordPress is not configured")
     if info.get("error"):
         return error(info["error"])
     return jsonify(info)
+
+
+# ---------------------------------------------------------------- websites
+
+@server.get("/api/websites")
+def list_websites():
+    """Every website (no passwords) with its article numbers, for the selector and Websites & Publishing."""
+    arts, today = ca.all_articles(), date.today().isoformat()
+    out = []
+    for w in websites.load():
+        mine = [m for m in arts if site_id_of(m) == w["id"]]
+        c = counts(mine)
+        out.append(websites.public(w) | {"stats": {
+            "articles": len(mine), "working": c["working"], "review": c.get("ready", 0) + c.get("changes", 0),
+            "approved": c.get("approved", 0), "scheduled": c.get("scheduled", 0), "published": c.get("published", 0),
+            "published_today": sum(1 for m in mine if (m.get("published_at") or "").startswith(today)),
+            "failed": sum(1 for m in mine if m.get("publish_error") and m["status"] != "published")}})
+    return jsonify(items=out, default=(websites.default() or {}).get("id"))
+
+
+@server.post("/api/websites")
+def save_website():
+    """Add or edit a website. A new website gets its own starter Claude template; WordPress details (optional) are
+    checked by logging in before they are saved."""
+    d = request.json or {}
+    is_new = not d.get("id")
+    if not is_new and not websites.get(d["id"]):
+        abort(404)
+    try:
+        site = websites.upsert(d)
+    except ValueError as e:
+        return error(str(e))
+    if is_new:
+        tpl = cfg.upsert_template({"name": f"{site['name']} – Standard", "model": "",
+                                   "description": f"Starter template for {site['name']} ({site.get('niche') or 'general'})",
+                                   "system": websites.starter_system(site), "user": cfg.DEFAULT_USER_PROMPT}, site["id"])
+        site = websites.upsert({"id": site["id"], "template_id": tpl["id"]})
+    activity.log("Website added" if is_new else "Website updated", "System", site["name"], website_id=site["id"])
+    wp = d.get("wp") or {}
+    out = {}
+    if wp.get("url") and wp.get("user"):
+        password = (wp.get("password") or "").strip() or websites.wp_config(site)[2]
+        if password:
+            _, err = _connect_site(site, wp["url"].strip().rstrip("/"), wp["user"].strip(), password)
+            if err:
+                out["wp_error"] = err
+    return jsonify(websites.public(websites.get(site["id"])) | out)
+
+
+@server.delete("/api/websites/<wid>")
+def delete_website(wid):
+    """Delete a website without articles (with its own templates and rules). One with articles: deactivate instead."""
+    site = websites.get(wid) or abort(404)
+    try:
+        websites.remove(wid, sum(1 for m in ca.all_articles() if site_id_of(m) == wid))
+    except ValueError as e:
+        return error(str(e))
+    cfg.save_templates([t for t in cfg.load_templates() if t.get("website_id") != wid])
+    automation.save_rules([r for r in automation.load_rules() if r.get("website_id") != wid])
+    for s in ca.sources.load_sources():   # sources no other website uses
+        if not websites.users_of(s["id"]):
+            ca.sources.remove_source(s["id"])
+    activity.log("Website deleted", "System", site["name"], website_id="")
+    return jsonify(ok=True)
+
+
+@server.post("/api/websites/<wid>/sources")
+def website_sources(wid):
+    """Which news sources a website uses: {"all": true} or {"source_id": ..., "assigned": bool}."""
+    if not websites.get(wid):
+        abort(404)
+    d = request.json or {}
+    if d.get("all"):
+        websites.upsert({"id": wid, "source_ids": [s["id"] for s in ca.sources.load_sources()]})
+    else:
+        websites.set_source(wid, str(d.get("source_id")), bool(d.get("assigned")), [s["id"] for s in ca.sources.load_sources()])
+    return jsonify(websites.public(websites.get(wid)))
 
 
 # ---------------------------------------------------------------- Claude
@@ -801,14 +1108,23 @@ def claude_logout():
 # ---------------------------------------------------------------- automation rules
 
 def _act_fetch(rule, payload):
-    data = do_scan(user="System")
+    data = do_scan(user="System", site=websites.get(rule.get("website_id")))
     return f"fetched {len(data['items'])} titles"
+
+
+def _rule_site(rule, payload):
+    """The website a rule works for: its own, or (shared rule) the website this news fits best."""
+    site = websites.get(rule.get("website_id")) or websites.best_site(payload)
+    if not site:
+        raise RuntimeError("this news does not fit any website's niche")
+    return site
 
 
 def _act_generate(rule, payload):
     if not payload.get("url"):
         raise RuntimeError("no article in event")
-    ids = select_items([payload], user="System")
+    site = _rule_site(rule, payload)
+    ids = [a for a in select_items([payload], user="System", website_id=site["id"]) if site_id_of(ca.load(a)) == site["id"]]
     for aid in ids:
         if ca.load(aid)["status"] not in ca.WORKING and not ca.load(aid).get("article"):
             ca.set_status(aid, "queued", f"Queued by rule '{rule['name']}'", step="")
@@ -817,7 +1133,11 @@ def _act_generate(rule, payload):
 
 
 def _act_extract(rule, payload):
-    ids = select_items([payload], user="System") if payload.get("url") else [payload["id"]]
+    if payload.get("url"):
+        site = _rule_site(rule, payload)
+        ids = [a for a in select_items([payload], user="System", website_id=site["id"]) if site_id_of(ca.load(a)) == site["id"]]
+    else:
+        ids = [payload["id"]]
     for aid in ids:
         ca.extract(aid)
     return "extracted"
@@ -850,20 +1170,35 @@ for _name, _fn in (("fetch", _act_fetch), ("generate", _act_generate), ("extract
 automation.start_scheduler()
 
 
+def _ctx_rule(rid: str) -> dict:
+    rule = next((r for r in automation.load_rules() if r["id"] == rid), None)
+    site = ctx_site()
+    if not rule or (site and rule.get("website_id") not in ("", None, site["id"])):
+        abort(404)
+    return rule
+
+
 @server.get("/api/rules")
 def rules():
-    return jsonify(items=automation.load_rules(), triggers=automation.TRIGGERS, actions=automation.ACTIONS)
+    """The selected website's rules plus the shared ones (website_id empty, e.g. scanning sources)."""
+    site = ctx_site()
+    items = [r for r in automation.load_rules() if site is None or r.get("website_id") in ("", None, site["id"])]
+    return jsonify(items=items, triggers=automation.TRIGGERS, actions=automation.ACTIONS)
 
 
 @server.post("/api/rules")
 def post_rule():
-    r = automation.upsert_rule(request.json or {})
+    d, site = request.json or {}, ctx_site()
+    if d.get("id"):
+        _ctx_rule(d["id"])
+    r = automation.upsert_rule(d, site["id"] if site else "")
     activity.log("Automation rule saved", "Automation", r["name"])
     return jsonify(r)
 
 
 @server.delete("/api/rules/<rid>")
 def del_rule(rid):
+    _ctx_rule(rid)
     automation.delete_rule(rid)
     activity.log("Automation rule deleted", "Automation", rid)
     return jsonify(ok=True)
@@ -871,9 +1206,7 @@ def del_rule(rid):
 
 @server.post("/api/rules/<rid>/run")
 def run_rule(rid):
-    rule = next((r for r in automation.load_rules() if r["id"] == rid), None)
-    if not rule:
-        abort(404)
+    rule = _ctx_rule(rid)
     automation._run(rule, {})
     return jsonify(ok=True)
 
@@ -882,8 +1215,9 @@ def run_rule(rid):
 
 @server.get("/api/logs")
 def logs():
-    days = int(request.args.get("days", 7))
-    return jsonify(items=activity.read(days))
+    days, site = int(request.args.get("days", 7)), ctx_site()
+    return jsonify(items=activity.read(days, website_id=site["id"] if site else "",
+                                       default_id=(websites.default() or {}).get("id", "")))
 
 
 @server.get("/api/logs/export")
@@ -892,9 +1226,12 @@ def logs_export():
     import io
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["time", "user", "action", "module", "details", "status"])
-    for e in activity.read(int(request.args.get("days", 30))):
-        w.writerow([e["t"], e["user"], e["action"], e["module"], e["details"], e["status"]])
+    site = ctx_site()
+    names = {x["id"]: x["name"] for x in websites.load()}
+    w.writerow(["time", "website", "user", "action", "module", "details", "status"])
+    for e in activity.read(int(request.args.get("days", 30)), website_id=site["id"] if site else "",
+                           default_id=(websites.default() or {}).get("id", "")):
+        w.writerow([e["t"], names.get(e.get("website_id"), ""), e["user"], e["action"], e["module"], e["details"], e["status"]])
     return server.response_class("﻿" + buf.getvalue(), mimetype="text/csv",  # BOM: Excel la UTF-8 (Marathi) samajte
                                  headers={"Content-Disposition": "attachment; filename=activity-logs.csv"})
 
@@ -909,7 +1246,7 @@ def logs_cleanup():
 
 @server.get("/api/seo/overview")
 def seo_overview():
-    items = [m for m in ca.all_articles() if m.get("article")]
+    items = [m for m in ctx_articles() if m.get("article")]
     scored = [(m, ca.seo_score(m)) for m in items]
     checks = {}
     for _, s in scored:
@@ -934,15 +1271,13 @@ def seo_overview():
 
 @server.post("/api/seo/preview")
 def seo_preview():
-    d = request.json
+    """Preview the selected website's SEO title / description with unsaved changes (nothing is written)."""
+    d, site = request.json, ctx_site()
     a = d.get("sample") or {}
-    saved = cfg.load_settings()
-    cfg.save_settings({"seo": d.get("seo", {})})
-    try:
-        return jsonify(title=ca.seo_title(a, a.get("source", "")) or a.get("title", ""), description=ca.seo_description(a) or a.get("excerpt", ""))
-    finally:
-        if not d.get("persist"):
-            cfg.SETTINGS_FILE.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    base = site or websites.default() or {}
+    draft = dict(base, settings={**(base.get("settings") or {}), "seo": {**cfg.load_settings(base)["seo"], **(d.get("seo") or {})}})
+    return jsonify(title=ca.seo_title(a, a.get("source", ""), draft) or a.get("title", ""),
+                   description=ca.seo_description(a, draft) or a.get("excerpt", ""))
 
 
 # ---------------------------------------------------------------- export
@@ -953,10 +1288,11 @@ def export_articles():
     import io
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["id", "status", "title", "source", "category", "created", "published_at", "url", "seo"])
-    for m in ca.all_articles():
+    names = {x["id"]: x["name"] for x in websites.load()}
+    w.writerow(["id", "website", "status", "title", "source", "category", "created", "published_at", "url", "seo"])
+    for m in ctx_articles():
         a = m.get("article") or {}
-        w.writerow([m["id"], m["status"], a.get("title") or m["source"]["title"], m["source"].get("source"),
+        w.writerow([m["id"], names.get(site_id_of(m), ""), m["status"], a.get("title") or m["source"]["title"], m["source"].get("source"),
                     ",".join(a.get("categories", [])), m["created"], m.get("published_at", ""), m.get("url", ""),
                     ca.seo_score(m)["score"] if a else ""])
     return server.response_class("﻿" + buf.getvalue(), mimetype="text/csv",  # BOM: Excel la UTF-8 (Marathi) samajte
@@ -969,7 +1305,7 @@ def export_backup():
     import zipfile
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in list(ca.CA_DIR.rglob("*")) + [f for f in (cfg.SETTINGS_FILE, cfg.TEMPLATES_FILE, ca.sources.SOURCES_FILE, automation.RULES_FILE) if f.exists()]:
+        for p in list(ca.CA_DIR.rglob("*")) + [f for f in (cfg.SETTINGS_FILE, cfg.TEMPLATES_FILE, ca.sources.SOURCES_FILE, automation.RULES_FILE, websites.FILE, websites.HIDDEN_FILE) if f.exists()]:
             if p.is_file():
                 z.write(p, p.relative_to(ca.BASE))
     buf.seek(0)

@@ -6,3 +6,6 @@ ca_articles/
 ca_cache/
 articles/
 settings.json
+
+# per-website profiles (local data, like settings.json)
+websites.json

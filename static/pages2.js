@@ -1,12 +1,17 @@
 /* Pages: Review Center, Article, Published Articles, WordPress, Claude Configuration */
 
 // ------------------------------------------------------------------ REVIEW CENTER
+// only what still needs a decision; approved -> Approved Articles, published -> Published Articles
+const REVIEW_STATUSES = ['ready', 'changes', 'draft'];
+const reviewList = () => S.articles.filter(a => (S.ui.rvStatus ? a.status === S.ui.rvStatus : REVIEW_STATUSES.includes(a.status))
+  && (!S.ui.rvQ || a.title.toLowerCase().includes(S.ui.rvQ)));
 ROUTES.review = async function (first) {
-  if (first) { await Promise.all([loadArticles(), loadState(), loadWp()]); S.ui.rvTab = 'edit'; S.ui.rvQ = ''; S.ui.rvStatus = ''; S.ui.device = 'desktop'; S.ui.editing = false; }
-  const list = S.articles.filter(a => inReview(a) || a.status === 'published').filter(a => (!S.ui.rvQ || a.title.toLowerCase().includes(S.ui.rvQ)) && (!S.ui.rvStatus || a.status === S.ui.rvStatus));
+  if (first) { await Promise.all([loadArticles(), loadState()]); if (!S.wp) loadWp(); S.ui.rvTab = 'edit'; S.ui.rvQ = ''; S.ui.rvStatus = ''; S.ui.device = 'desktop'; S.ui.editing = false; }
+  const list = reviewList();
   const c = S.counts;
-  if (!S.current || !list.some(a => a.id === S.current.id)) {
-    const pick = S.param ? list.find(a => a.id === S.param) : list[0];
+  // an approved / published article opened from its own page (#/review/<id>) is shown although it is not listed
+  if (!S.current || (!list.some(a => a.id === S.current.id) && S.current.id !== S.param)) {
+    const pick = S.param ? S.articles.find(a => a.id === S.param) : list[0];
     S.current = pick ? await api(`/api/articles/${pick.id}`) : null;
   }
   const cur = S.current;
@@ -14,7 +19,7 @@ ROUTES.review = async function (first) {
   ${pageHead({ crumb: 'Review Center', icon: 'check', color: 'g-blue', title: 'Review Center', sub: 'Review, edit and optimize AI-generated articles before publishing to your WordPress website.',
     right: `<div class="head-info">${icon('calendar')}<div><b>Today</b><span>${fmtDate(today())}</span></div></div>` })}
   <div class="kpis stagger">
-    ${kpi({ g: 'violet', ic: 'file', val: (c.ready || 0) + (c.changes || 0), label: 'Articles to Review', note: 'Generated with AI' })}
+    ${kpi({ g: 'violet', ic: 'file', val: REVIEW_STATUSES.reduce((n, s) => n + (c[s] || 0), 0), label: 'Articles to Review', note: 'Generated with AI' })}
     ${kpi({ g: 'green', ic: 'check', val: c.approved || 0, label: 'Approved', note: 'Ready to publish' })}
     ${kpi({ g: 'orange', ic: 'edit', val: c.changes || 0, label: 'Need Modifications', note: 'Edit and improve' })}
     ${kpi({ g: 'red', ic: 'x', val: c.rejected || 0, label: 'Rejected', note: 'Not suitable' })}
@@ -24,23 +29,23 @@ ROUTES.review = async function (first) {
     <div class="card" style="overflow:hidden">
       <div style="padding:12px 14px;border-bottom:1px solid var(--line2);display:flex;gap:8px;flex-wrap:wrap">
         <div class="search-in grow">${icon('search')}<input class="input" id="rv-q" placeholder="Search articles…" value="${esc(S.ui.rvQ)}"></div>
-        <select class="select" id="rv-status"><option value="">All Status</option>${['ready', 'changes', 'approved', 'rejected', 'draft', 'scheduled', 'published'].map(s => `<option value="${s}" ${S.ui.rvStatus === s ? 'selected' : ''}>${STATUS[s][1]}</option>`).join('')}</select>
+        <select class="select" id="rv-status"><option value="">All to review</option>${['ready', 'changes', 'draft', 'rejected'].map(s => `<option value="${s}" ${S.ui.rvStatus === s ? 'selected' : ''}>${STATUS[s][1]}</option>`).join('')}</select>
       </div>
       <div class="rv-list">${list.length ? list.map(a => `<div class="rv-item ${cur?.id === a.id ? 'on' : ''}" data-act="rv-open" data-id="${a.id}">
         <div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div>${thumb(a, 'thumb')}
-        <div class="row-main"><div class="rt ${mr(a.title)}">${esc(a.title)}</div><div class="rm">${esc(a.source.source)} · ${fmtDate(a.created)}</div><div class="rb">${catPill(a.categories[0] || a.source.category)}${badge(a.status)}${srcCount(a)}</div></div></div>`).join('')
-      : empty('check', 'Nothing to review', 'Finished articles appear here.')}</div>
+        <div class="row-main"><div class="rt ${mr(a.title)}">${esc(a.title)}</div><div class="rm">${esc(a.source.source)} · ${fmtDate(a.created)}</div><div class="rb">${catPill(a.categories[0] || a.source.category)}${badge(a.status)}${srcCount(a)}${siteChip(a)}</div></div></div>`).join('')
+      : empty('check', 'Nothing to review', 'Articles Claude has written appear here. Approved and published ones are under Approved Articles and Published Articles.')}</div>
     </div>
     ${cur ? reviewEditor(cur) : `<div class="card">${empty('file', 'Select an article', 'Pick an article from the list to review it.')}</div><div></div>`}
   </div>
   ${cur ? `<div class="action-bar">
-    <button class="btn" data-act="rv-nav" data-d="-1">${icon('back')}Previous Article</button><div class="grow"></div>
-    <button class="btn" data-act="one" data-a="retry" data-id="${cur.id}" style="color:var(--violet);border-color:#ddd6fe;background:var(--violet-soft)">${icon('spark')}Regenerate with Claude</button>
-    <button class="btn" data-act="rv-save" data-busy="Saving…" style="color:var(--primary);border-color:#bfdbfe;background:var(--primary-soft)">${icon('save')}Save Changes</button>
+    <button class="btn" data-act="rv-nav" data-d="-1" title="Previous article">${icon('back')}<span class="ab-more">Previous Article</span></button><div class="grow"></div>
+    <button class="btn" data-act="one" data-a="retry" data-id="${cur.id}" style="color:var(--violet);border-color:#ddd6fe;background:var(--violet-soft)">${icon('spark')}Regenerate<span class="ab-more"> with Claude</span></button>
+    <button class="btn" data-act="rv-save" data-busy="Saving…" style="color:var(--primary);border-color:#bfdbfe;background:var(--primary-soft)">${icon('save')}Save<span class="ab-more"> Changes</span></button>
     <button class="btn success" data-act="one" data-a="approve" data-id="${cur.id}">${icon('tick')}Approve</button>
     <button class="btn danger-solid" data-act="one" data-a="reject" data-id="${cur.id}">${icon('x')}Reject</button>
-    <button class="btn primary" data-act="one" data-a="publish" data-id="${cur.id}" data-busy="Publishing…">${icon('wp')}Publish to WordPress</button>
-    <button class="btn" data-act="rv-nav" data-d="1">Next Article ${icon('arrow')}</button>
+    <button class="btn primary" data-act="one" data-a="publish" data-id="${cur.id}" data-busy="Publishing…">${icon('wp')}Publish<span class="ab-more"> to WordPress</span></button>
+    <button class="btn" data-act="rv-nav" data-d="1" title="Next article"><span class="ab-more">Next Article </span>${icon('arrow')}</button>
   </div>` : ''}`, first);
   bindReview();
 };
@@ -71,14 +76,14 @@ function reviewEditor(a) {
     seo: `<div class="editor-body"><div class="section-title" style="margin-bottom:12px">SEO &amp; Meta</div>
       <div class="field"><label>SEO title (Rank Math)</label><div class="prompt-box mr" style="min-height:0">${esc(art.title)}</div>${meter([...art.title].length, 40, 70, 90)}</div>
       <div class="field"><label>Meta description</label><div class="prompt-box mr" style="min-height:0">${esc(art.excerpt)}</div>${meter([...art.excerpt].length, 120, 160, 200)}</div>
-      <dl class="kv-grid"><dt>Focus keyword</dt><dd class="mr">${esc(art.focus_keyword)}</dd><dt>URL</dt><dd><code>${esc((S.state.wp_url || '') + '/' + art.slug)}</code></dd><dt>Categories</dt><dd>${art.categories.map(c => `<span class="tag cat2 mr">${esc(c)}</span>`).join('')}</dd><dt>Tags</dt><dd>${art.tags.map(t => `<span class="tag mr">${esc(t)}</span>`).join('')}</dd></dl>
+      <dl class="kv-grid"><dt>Focus keyword</dt><dd class="mr">${esc(art.focus_keyword)}</dd><dt>URL</dt><dd><code>${esc(siteUrlOf(a) + '/' + art.slug)}</code></dd><dt>Categories</dt><dd>${art.categories.map(c => `<span class="tag cat2 mr">${esc(c)}</span>`).join('')}</dd><dt>Tags</dt><dd>${art.tags.map(t => `<span class="tag mr">${esc(t)}</span>`).join('')}</dd></dl>
       <div class="section-title" style="margin:18px 0 8px">Checklist</div><div class="check-list">${seo.checks.map(ch => `<div class="${ch.ok ? 'ok' : 'no'}">${icon(ch.ok ? 'check' : 'alert')}<span>${esc(ch.label)} <span class="row-meta">(${ch.weight} pts)</span></span></div>`).join('')}</div></div>`,
     notes: `<div class="editor-body"><div class="section-title" style="margin-bottom:12px">Reviewer notes</div><textarea class="input" id="e-notes" rows="10" placeholder="Notes for yourself or for the next rewrite…">${esc(a.notes || '')}</textarea><div style="display:flex;gap:10px;margin-top:12px"><button class="btn primary" data-act="rv-save" data-busy="Saving…">${icon('save')}Save notes</button><button class="btn" data-act="one" data-a="changes" data-id="${a.id}">${icon('edit')}Mark as needs modification</button></div></div>`,
   };
   return `<div class="card" style="overflow:hidden">
     <div class="editor-tabs">${[['edit', 'Edit Article'], ['source', 'Source Content'], ['ai', 'AI Data'], ['images', 'Images'], ['seo', 'SEO & Meta'], ['notes', 'Notes']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="rv-tab" data-v="${k}">${l}</button>`).join('')}</div>
     ${tabs[tab] || editTab}
-    <div class="editor-foot"><span>Word Count: <b id="wc">${a.words}</b></span><span>Reading Time: <b>${a.reading_min} min</b></span><span>Last Updated: <b>${fmtDT(a.updated)}</b></span><div class="grow"></div>${badge(a.status)}<button class="btn sm" data-act="one" data-a="draft" data-id="${a.id}" data-busy="Sending…">${icon('send')}${a.wp_id ? 'Update WordPress draft' : 'Save Draft to WordPress'}</button></div>
+    <div class="editor-foot"><span>Word Count: <b id="wc">${a.words}</b></span><span>Reading Time: <b>${a.reading_min} min</b></span><span>Last Updated: <b>${fmtDT(a.updated)}</b></span><div class="grow"></div><span class="pub-to" title="${esc(siteUrlOf(a))}">${icon('globe')}Publishes to <b>${esc(siteById(a.website_id)?.name || 'its website')}</b></span>${badge(a.status)}<button class="btn sm" data-act="one" data-a="draft" data-id="${a.id}" data-busy="Sending…">${icon('send')}${a.wp_id ? 'Update WordPress draft' : 'Save Draft to WordPress'}</button></div>
   </div>
   <div class="stack">
     <div class="card section"><div class="section-head"><div class="device-tabs"><button class="${S.ui.device === 'desktop' ? 'on' : ''}" data-act="rv-device" data-v="desktop">${icon('desktop')}Desktop</button><button class="${S.ui.device === 'mobile' ? 'on' : ''}" data-act="rv-device" data-v="mobile">${icon('mobile')}Mobile</button></div>${a.url ? `<a class="link" target="_blank" href="${esc(a.url)}">Live Preview ↗</a>` : ''}</div>
@@ -164,15 +169,17 @@ async function saveReview(btn) {
   toast('ok', 'Changes saved', a.wp_id ? 'Click “Update WordPress draft” or Publish to send them to the site' : '');
   await loadArticles(); rerender();
 }
-ACTIONS['rv-open'] = async (el, e) => { if (e.target.closest('.cb')) return; S.current = await api(`/api/articles/${el.dataset.id}`); S.ui.editing = false; ROUTES.review(false); };
+// an article picked in the list replaces the one the page was opened with (#/review/<id>)
+const rvForgetParam = () => { if (S.param) { S.param = null; history.replaceState(null, '', '#/review'); } };
+ACTIONS['rv-open'] = async (el, e) => { if (e.target.closest('.cb')) return; rvForgetParam(); S.current = await api(`/api/articles/${el.dataset.id}`); S.ui.editing = false; ROUTES.review(false); };
 ACTIONS['rv-tab'] = async el => { if (S.ui.editing && S.ui.rvTab === 'edit' && !await confirmBox({ title: 'Discard unsaved edits?', text: 'You have unsaved changes in the editor.', ok: 'Discard' })) return; S.ui.editing = false; S.ui.rvTab = el.dataset.v; ROUTES.review(false); };
 ACTIONS['rv-device'] = el => { S.ui.device = el.dataset.v; $('#live-prev').className = `live-prev ${el.dataset.v}`; $$('.device-tabs button').forEach(b => b.classList.toggle('on', b === el)); };
 ACTIONS['rv-save'] = el => saveReview(el);
 ACTIONS['rv-nav'] = async el => {
-  const list = S.articles.filter(a => inReview(a) || a.status === 'published');
+  const list = reviewList();
   const i = list.findIndex(a => a.id === S.current?.id), n = list[i + (+el.dataset.d)];
   if (!n) return toast('info', 'No more articles');
-  S.current = await api(`/api/articles/${n.id}`); S.ui.editing = false; ROUTES.review(false);
+  rvForgetParam(); S.current = await api(`/api/articles/${n.id}`); S.ui.editing = false; ROUTES.review(false);
 };
 
 // ------------------------------------------------------------------ ARTICLE (single)
@@ -200,7 +207,7 @@ ROUTES.article = async function (first) {
 // ------------------------------------------------------------------ PUBLISHED
 ROUTES.published = async function (first) {
   if (first) { await Promise.all([loadArticles(), loadState(), loadWp()]); S.ui.pubQ = ''; S.ui.pubCat = ''; S.ui.pubStatus = ''; S.ui.pubDays = '30'; S.ui.pubPage = 1; }
-  const all = S.articles.filter(a => ['published', 'scheduled', 'draft'].includes(a.status));
+  const all = S.articles.filter(a => ['published', 'scheduled'].includes(a.status));   // drafts stay in the Review Center
   const since = S.ui.pubDays === 'all' ? '' : new Date(Date.now() - (+S.ui.pubDays) * 864e5).toISOString();
   let list = all.filter(a => (!S.ui.pubQ || a.title.toLowerCase().includes(S.ui.pubQ)) && (!S.ui.pubCat || a.categories.includes(S.ui.pubCat)) && (!S.ui.pubStatus || a.status === S.ui.pubStatus) && (!since || (a.published_at || a.updated) >= since));
   list = sortList('pub', list, { title: a => a.title, category: a => a.categories[0] || '', date: a => a.published_at || a.updated, seo: a => a.seo, status: a => a.status });
@@ -210,26 +217,26 @@ ROUTES.published = async function (first) {
   const avgSeo = pub.length ? Math.round(pub.reduce((s, a) => s + a.seo, 0) / pub.length) : 0;
   paint(`
   ${pageHead({ title: 'Published Articles', sub: 'Manage and view all your published articles on WordPress.',
-    right: `<a class="btn primary lg" target="_blank" href="${esc(S.state.wp_url || '#')}/wp-admin/post-new.php">${icon('plus')}Manual Publish</a>` })}
+    right: S.state.wp_url ? `<a class="btn primary lg" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post-new.php">${icon('plus')}Manual Publish</a>` : '' })}
   <div class="kpis four stagger">
     ${kpi({ g: 'green', ic: 'file', val: pub.length, label: 'Total Published', note: `${pub.filter(a => (a.published_at || '').slice(0, 7) === today().slice(0, 7)).length} this month` })}
     ${kpi({ g: 'blue', ic: 'calendar', val: S.state.published_today, label: 'Published Today', ...trendNote(S.state.published_today, S.state.published_yesterday) })}
-    ${kpi({ g: 'violet', ic: 'clock', val: all.filter(a => a.status === 'scheduled').length, label: 'Scheduled', note: `${all.filter(a => a.status === 'draft').length} drafts on WordPress` })}
+    ${kpi({ g: 'violet', ic: 'clock', val: all.filter(a => a.status === 'scheduled').length, label: 'Scheduled', note: 'waiting to go live' })}
     ${kpi({ g: 'orange', ic: 'award', val: avgSeo, label: 'Avg. SEO Score', note: pub.length ? `${pub.filter(a => a.seo >= 80).length} articles scored 80+` : 'No published articles yet' })}
   </div>
   <div class="card toolbar">
     <div class="search-in grow">${icon('search')}<input class="input" id="pub-q" placeholder="Search published articles…" value="${esc(S.ui.pubQ)}"></div>
     <select class="select" id="pub-cat"><option value="">All Categories</option>${cats.map(c => `<option ${S.ui.pubCat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
-    <select class="select" id="pub-status"><option value="">All Status</option><option value="published" ${S.ui.pubStatus === 'published' ? 'selected' : ''}>Live</option><option value="scheduled" ${S.ui.pubStatus === 'scheduled' ? 'selected' : ''}>Scheduled</option><option value="draft" ${S.ui.pubStatus === 'draft' ? 'selected' : ''}>Draft</option></select>
+    <select class="select" id="pub-status"><option value="">All Status</option><option value="published" ${S.ui.pubStatus === 'published' ? 'selected' : ''}>Live</option><option value="scheduled" ${S.ui.pubStatus === 'scheduled' ? 'selected' : ''}>Scheduled</option></select>
     <select class="select" id="pub-days">${[['7', 'Last 7 Days'], ['30', 'Last 30 Days'], ['90', 'Last 90 Days'], ['all', 'All time']].map(([v, l]) => `<option value="${v}" ${S.ui.pubDays === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-    <a class="btn" href="/api/export/articles">${icon('download')}Export</a><button class="icon-btn" data-act="pub-refresh" style="width:38px;height:38px">${icon('refresh')}</button>
+    <a class="btn" href="/api/export/articles?website=${encodeURIComponent(S.site || 'all')}">${icon('download')}Export</a><button class="icon-btn" data-act="pub-refresh" style="width:38px;height:38px">${icon('refresh')}</button>
   </div>
   <div class="card section">
     ${slice.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>#</th><th>Featured image</th>${th('pub', 'title', 'Title')}${th('pub', 'category', 'Category')}${th('pub', 'date', 'Published date')}${th('pub', 'seo', 'SEO')}${th('pub', 'status', 'Status')}<th>Actions</th></tr></thead><tbody>
     ${slice.map((a, i) => `<tr class="clickable ${S.asel.has(a.id) ? 'on' : ''}" data-href="#/review/${a.id}"><td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td><td class="row-meta">${(page - 1) * per + i + 1}</td>
-      <td>${thumb(a, 'thumb lg')}</td><td><div class="t-title wrap ${mr(a.title)}" style="max-width:360px">${esc(a.title)}</div><div>${a.tags.slice(0, 3).map(t => `<span class="tag mr">${esc(t)}</span>`).join('')}</div></td>
+      <td>${thumb(a, 'thumb lg')}</td><td><div class="t-title wrap ${mr(a.title)}" style="max-width:360px">${esc(a.title)}</div>${siteChip(a)}<div>${a.tags.slice(0, 3).map(t => `<span class="tag mr">${esc(t)}</span>`).join('')}</div></td>
       <td>${catPill(a.categories[0])}</td><td class="row-meta">${fmtDate(a.published_at || a.scheduled_for || a.updated)}<br>${fmtTime(a.published_at || a.scheduled_for || a.updated)}</td><td>${ring(a.seo, true)}</td><td>${badge(a.status)}</td>
-      <td><div class="acts"><a class="icon-btn" href="#/review/${a.id}" title="View">${icon('eye')}</a><a class="icon-btn" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post.php?post=${a.wp_id}&action=edit" title="Edit in WordPress">${icon('edit')}</a><a class="icon-btn" target="_blank" href="${esc(a.url)}" title="Open">${icon('ext')}</a>${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish now">${icon('rocket')}</button>` : ''}</div></td></tr>`).join('')}
+      <td><div class="acts"><a class="icon-btn" href="#/review/${a.id}" title="View">${icon('eye')}</a><a class="icon-btn" target="_blank" href="${esc(siteUrlOf(a))}/wp-admin/post.php?post=${a.wp_id}&action=edit" title="Edit in WordPress">${icon('edit')}</a><a class="icon-btn" target="_blank" href="${esc(a.url)}" title="Open">${icon('ext')}</a>${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish now">${icon('rocket')}</button>` : ''}</div></td></tr>`).join('')}
     </tbody></table></div>${pager(list.length, page, per, 'pub-page')}` : empty('rocket', 'Nothing published yet', 'Publish from the Review Center or WordPress page.', `<a class="btn primary" href="#/review">${icon('check')}Open Review Center</a>`)}
   </div>`, first);
   renderBulk();
@@ -241,6 +248,7 @@ ACTIONS['pub-refresh'] = async () => { await Promise.all([loadArticles(), loadWp
 
 // ------------------------------------------------------------------ WORDPRESS
 ROUTES.wordpress = async function (first) {
+  if (!S.site) return websitesPage(first);
   if (first) { await Promise.all([loadArticles(), loadState(), loadWp(), loadSettings(), S.state.wp_ready ? api('/api/wordpress/lists').then(d => { S.wpLists = d; }).catch(() => {}) : null]); S.ui.wpTab = 'ready'; }
   const wp = S.wp || {}, pub = S.settings.publish;
   const groups = { ready: S.articles.filter(a => ['approved', 'ready', 'changes'].includes(a.status)), published: S.articles.filter(a => a.status === 'published'), scheduled: S.articles.filter(a => a.status === 'scheduled'), drafts: S.articles.filter(a => a.status === 'draft'), failed: S.articles.filter(a => a.status === 'error' && a.article) };
@@ -248,7 +256,7 @@ ROUTES.wordpress = async function (first) {
   for (const id of [...S.asel]) if (!S.articles.some(a => a.id === id && a.article)) S.asel.delete(id);
   const approved = S.articles.filter(a => a.status === 'approved');
   paint(`
-  ${pageHead({ crumb: 'WordPress Publishing', icon: 'wp', color: 'g-wp', title: 'WordPress Publishing', sub: 'Manage your WordPress connection and publish AI-generated articles.',
+  ${pageHead({ crumb: 'Websites & Publishing', icon: 'wp', color: 'g-wp', title: 'Websites & Publishing', sub: 'This website’s WordPress connection, publishing defaults and articles ready to publish.',
     right: `<a class="btn" href="#/published">View Published Articles ${icon('ext')}</a>` })}
   <div class="kpis four stagger">
     ${kpi({ g: 'blue', ic: 'file', val: approved.length, label: 'Ready to Publish', note: 'Approved articles' })}
@@ -262,7 +270,7 @@ ROUTES.wordpress = async function (first) {
       ${rows.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>#</th><th>Title</th><th>Category</th><th>Source</th><th>SEO</th><th>Status</th><th>Modified</th><th>Actions</th></tr></thead><tbody>
         ${rows.map((a, i) => `<tr class="clickable ${S.asel.has(a.id) ? 'on' : ''}" data-href="#/review/${a.id}"><td style="width:36px"><div class="cb ${S.asel.has(a.id) ? 'on' : ''}" data-act="pick-art" data-id="${a.id}">${icon('tick')}</div></td><td class="row-meta">${i + 1}</td>
           <td><div class="tcell">${thumb(a, 'thumb')}<div class="t-title wrap ${mr(a.title)}">${esc(a.title)}</div></div></td><td>${catPill(a.categories[0])}</td><td><div class="tcell">${srcLogo(a.source.source, 'sm')}<span style="font-size:12px">${esc(a.source.source)}</span></div></td><td>${ring(a.seo, true)}</td><td>${badge(a.status)}</td><td class="row-meta">${ago(a.updated)}</td>
-          <td><div class="acts"><a class="icon-btn" href="#/review/${a.id}">${icon('eye')}</a>${a.wp_id ? `<a class="icon-btn" target="_blank" href="${esc(S.state.wp_url)}/wp-admin/post.php?post=${a.wp_id}&action=edit">${icon('edit')}</a>` : ''}${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish">${icon('rocket')}</button><button class="icon-btn blue" data-act="wp-schedule" data-id="${a.id}" title="Schedule">${icon('calendar')}</button>` : ''}</div></td></tr>`).join('')}
+          <td><div class="acts"><a class="icon-btn" href="#/review/${a.id}">${icon('eye')}</a>${a.wp_id ? `<a class="icon-btn" target="_blank" href="${esc(siteUrlOf(a))}/wp-admin/post.php?post=${a.wp_id}&action=edit">${icon('edit')}</a>` : ''}${a.status !== 'published' ? `<button class="icon-btn green" data-act="one" data-a="publish" data-id="${a.id}" title="Publish">${icon('rocket')}</button><button class="icon-btn blue" data-act="wp-schedule" data-id="${a.id}" title="Schedule">${icon('calendar')}</button>` : ''}</div></td></tr>`).join('')}
       </tbody></table></div>` : empty('wp', 'No articles here', S.ui.wpTab === 'ready' ? 'Approve articles in the Review Center first.' : 'Nothing in this state yet.')}
       <div class="grid-3">
         <div class="card info-card info-blue" style="grid-column:span 2"><div class="ic">${icon('gear')}</div><div><b>SEO &amp; WordPress Optimization</b><p>Each publish sends the title, content, excerpt, slug, categories, tags${pub.featured_image ? ', featured image' : ''}${pub.rankmath_meta ? ' and Rank Math focus keyword / meta' : ''}.</p>
@@ -271,6 +279,7 @@ ROUTES.wordpress = async function (first) {
       </div>
     </div>
     <div class="stack sticky">
+      ${siteProfileCard(curSite())}
       <div class="card section"><div class="section-head"><div class="section-title">WordPress Connection</div>${wp.connected ? '<span class="badge b-live">Connected</span>' : '<span class="badge b-failed">Not connected</span>'}</div>
         <div class="tcell" style="margin-bottom:10px"><div class="wp-logo">${icon('wp')}</div><div style="flex:1;min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(wp.name || 'Your website')}</b><div class="row-meta" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((wp.url || S.state.wp_url || 'Not configured').replace(/^https?:\/\//, ''))}</div></div></div>
         <div style="display:flex;gap:8px;margin-bottom:12px"><button class="btn sm" data-act="wp-test" data-busy="Testing…" style="flex:1;justify-content:center">${icon('bolt')}Test Connection</button><button class="btn sm" data-act="wp-connect-modal">${icon('gear')}Manage</button></div>
@@ -286,7 +295,7 @@ ROUTES.wordpress = async function (first) {
       <div class="card section"><div class="section-title" style="margin-bottom:6px">Publishing Options</div>
         ${[['featured_image', 'Set Featured Image', 'image'], ['rankmath_meta', 'Add Meta Title & Description (Rank Math)', 'tagi'], ['auto_draft', 'Auto-save draft to WordPress after writing', 'send']].map(([k, l, ic]) => `<div class="switch-row"><div class="sl">${icon(ic)}${l}</div><button class="switch ${pub[k] ? 'on' : ''}" data-act="set-toggle" data-key="publish.${k}"></button></div>`).join('')}
         <div class="switch-row"><div class="sl">${icon('link')}Auto Internal Links</div><button class="switch ${S.settings.seo.internal_links ? 'on' : ''}" data-act="set-toggle" data-key="seo.internal_links"></button></div></div>
-      <div class="card section" style="background:linear-gradient(135deg,#eff6ff,#f5f3ff)"><div class="tcell" style="margin-bottom:10px"><div class="src-logo" style="background:#fff;color:var(--primary)">${icon('rocket')}</div><div><b>Bulk Publishing</b><div class="row-meta">Publish multiple approved articles at once.</div></div></div>
+      <div class="card section claude-hero" style="background:linear-gradient(135deg,#eff6ff,#f5f3ff)"><div class="tcell" style="margin-bottom:10px"><div class="src-logo" style="background:#fff;color:var(--primary)">${icon('rocket')}</div><div><b>Bulk Publishing</b><div class="row-meta">Publish multiple approved articles at once.</div></div></div>
         <button class="btn primary block" data-act="wp-publish-approved" data-busy="Publishing…" ${approved.length ? '' : 'disabled'}>${icon('send')}Publish ${S.asel.size ? 'Selected' : 'Approved'} Articles (${S.asel.size || approved.length})</button></div>
     </div>
   </div>`, first);
@@ -321,7 +330,7 @@ ACTIONS['wp-schedule'] = (el, e) => {
 ACTIONS['wp-connect-modal'] = async () => {
   const cfg = await api('/api/wordpress');
   const m = modal(`<h3>WordPress connection</h3><p>Use an <b>Application Password</b> (WordPress → Users → Profile → Application Passwords). It is not your normal login password and can be revoked anytime.</p>
-    <form id="wp-form"><div class="field"><label>Website URL</label><input class="input" name="url" value="${esc(cfg.url || S.state.wp_url || 'https://mpscsuccess.com')}"></div>
+    <form id="wp-form"><div class="field"><label>Website URL</label><input class="input" name="url" value="${esc(cfg.url || S.state.wp_url || curSite()?.url || '')}"></div>
     <div class="field"><label>Username</label><input class="input" name="user" value="${esc(cfg.user_login || '')}" autocomplete="username"></div>
     <div class="field"><label>Application password</label><input class="input" type="password" name="password" placeholder="${cfg.has_password ? '•••••••••• (saved — leave empty to keep)' : 'xxxx xxxx xxxx xxxx xxxx xxxx'}" autocomplete="new-password"></div>
     <div id="wp-result"></div><div class="mbtns"><button type="button" class="btn" data-x>Cancel</button><button class="btn primary" data-busy="Testing connection…">${icon('bolt')}Test &amp; Save</button></div></form>`);
@@ -353,7 +362,7 @@ ROUTES.claude = async function (first) {
   </div>
   <div class="card" style="overflow:hidden">
     <div class="editor-tabs">${[['prompt', 'Prompt Configuration'], ['structure', 'Article Structure'], ['style', 'Writing Style'], ['advanced', 'Advanced Settings']].map(([k, l]) => `<button class="${S.ui.claudeTab === k ? 'on' : ''}" data-act="claude-tab" data-v="${k}">${l}</button>`).join('')}</div>
-    ${S.ui.claudeTab === 'prompt' ? `<div style="display:grid;grid-template-columns:300px minmax(0,1fr) 340px;gap:0">
+    ${S.ui.claudeTab === 'prompt' ? `<div class="claude-grid">
       <div style="padding:18px;border-right:1px solid var(--line2)"><div class="section-head"><div class="section-title" style="font-size:14px">Prompt Templates</div><button class="btn sm primary" data-act="tpl-new">${icon('plus')}New</button></div>
         ${S.templates.map(t => `<div class="tpl-item ${t.id === tpl?.id ? 'on' : ''}" data-act="tpl-pick" data-id="${t.id}"><div class="ti" style="background:${colorFor(t.name)[0]};color:${colorFor(t.name)[1]}">${icon('file')}</div><div style="flex:1;min-width:0"><b>${esc(t.name)} ${t.default ? '<span class="badge b-live" style="padding:1px 7px;font-size:10px">Default</span>' : ''}</b><span>${esc(t.description || '')}</span></div></div>`).join('')}</div>
       <div style="padding:18px;border-right:1px solid var(--line2)"><div class="section-title" style="font-size:14px;margin-bottom:12px">Edit Prompt Template</div>
@@ -420,4 +429,111 @@ ACTIONS['tpl-test-open'] = () => {
     catch (e) { S.ui.testOut = { error: e.message, item }; }
     const box = $('#test-out'); if (box) { box.innerHTML = testOutput(S.ui.testOut); hydrate(box); }
   };
+};
+
+
+// ------------------------------------------------------------------ WEBSITES (All Websites mode of Websites & Publishing)
+async function websitesPage(first) {
+  if (first) await Promise.all([loadWebsites(), loadState()]);
+  const ws = S.websites, act = ws.filter(w => w.status !== 'inactive'), on = ws.filter(w => w.connected).length;
+  const tot = k => ws.reduce((n, w) => n + (w.stats?.[k] || 0), 0);
+  paint(`
+  ${pageHead({ crumb: 'Websites & Publishing', icon: 'wp', color: 'g-wp', title: 'Websites & Publishing', sub: 'Every website you write for: its niche, WordPress connection and publishing. Open one (or pick it in the top bar) to work on it.',
+    right: `<button class="btn primary lg" data-act="site-edit">${icon('plus')}Add Website</button>` })}
+  <div class="kpis four stagger">
+    ${kpi({ g: 'blue', ic: 'globe', val: act.length, label: 'Active Websites', note: ws.length - act.length ? `${ws.length - act.length} deactivated` : 'All active' })}
+    ${kpi({ g: 'green', ic: 'wp', val: on, label: 'Connected to WordPress', note: on === ws.length ? 'All connected' : `${ws.length - on} not connected`, trend: on === ws.length ? 'up' : 'down' })}
+    ${kpi({ g: 'violet', ic: 'calendar', val: tot('scheduled'), label: 'Scheduled', note: 'across all websites' })}
+    ${kpi({ g: 'orange', ic: 'send', val: tot('published_today'), label: 'Published Today', note: `${tot('published')} published in total` })}
+  </div>
+  <div class="site-grid">${ws.map(siteCard).join('')}<button class="card site-card add" data-act="site-edit">${icon('plus')}<b>Add New Website</b><span>A new niche with its own WordPress</span></button></div>`, first);
+  if (S.ui.openAddSite) { S.ui.openAddSite = false; ACTIONS['site-edit']({ dataset: {} }); }
+}
+function siteCard(w) {
+  const st = w.stats || {};
+  return `<div class="card site-card ${w.status === 'inactive' ? 'off' : ''}">
+    <div class="sc-head">${w.logo ? `<img class="sc-logo" src="${esc(w.logo)}" alt="">` : srcLogo(w.name)}<div style="min-width:0;flex:1"><b>${esc(w.name)}</b>${w.is_default ? ' <span class="badge b-off" style="padding:1px 7px;font-size:10px">Default</span>' : ''}<a class="row-meta sc-url" href="${esc(w.url || '#')}" target="_blank">${esc((w.url || 'No URL').replace(/^https?:\/\//, ''))}</a></div>
+      ${w.status === 'inactive' ? '<span class="badge b-off">Deactivated</span>' : w.connected ? '<span class="badge b-live"><span class="bd"></span>Connected</span>' : '<span class="badge b-failed">Not connected</span>'}</div>
+    <div class="sc-niche">${esc(w.niche || 'No niche set')}${w.language ? ` · ${esc(w.language)}` : ''}</div>
+    ${(w.topics || []).length ? `<div class="sc-tags">${w.topics.slice(0, 6).map(t => `<span class="tag ${mr(t)}">${esc(t)}</span>`).join('')}</div>` : '<div class="row-meta">No topics: takes every news item from its sources</div>'}
+    <div class="sc-stats"><div><b>${st.review || 0}</b><span>To review</span></div><div><b>${st.approved || 0}</b><span>Approved</span></div><div><b>${st.scheduled || 0}</b><span>Scheduled</span></div><div><b>${st.published || 0}</b><span>Published</span></div></div>
+    <div class="sc-acts"><button class="btn sm primary" data-act="site-pick" data-id="${esc(w.id)}">Open</button><button class="btn sm" data-act="site-edit" data-id="${esc(w.id)}">${icon('edit')}Edit</button>
+      <button class="btn sm" data-act="site-status" data-id="${esc(w.id)}">${w.status === 'inactive' ? 'Activate' : 'Deactivate'}</button>${st.articles || w.is_default ? '' : `<button class="btn sm danger" data-act="site-del" data-id="${esc(w.id)}" title="Delete website">${icon('trash')}</button>`}</div></div>`;
+}
+function siteProfileCard(w) {
+  if (!w) return '';
+  const list = a => (a || []).length ? a.map(t => `<span class="tag ${mr(t)}">${esc(t)}</span>`).join('') : '—';
+  return `<div class="card section"><div class="section-head"><div class="section-title">Website profile</div><button class="btn sm" data-act="site-edit" data-id="${esc(w.id)}">${icon('edit')}Edit</button></div>
+    <dl class="kv-grid narrow"><dt>Website</dt><dd>${esc(w.name)}</dd><dt>Niche</dt><dd>${esc(w.niche || '—')}</dd><dt>Language</dt><dd>${esc(w.language || '—')}</dd>
+      <dt>Topics</dt><dd>${list((w.topics || []).concat(w.keywords || []))}</dd><dt>Blocked</dt><dd>${list(w.blocked_topics)}</dd>
+      <dt>Relevance</dt><dd>${w.relevance_threshold ?? 75}% or more</dd><dt>Sources</dt><dd>${(w.source_ids || []).length} own source${(w.source_ids || []).length === 1 ? '' : 's'} · <a class="link" href="#/sources">Manage</a></dd></dl></div>`;
+}
+ACTIONS['site-edit'] = el => {
+  let w = el.dataset.id ? siteById(el.dataset.id) : null, created = false;
+  const v = k => esc(w?.[k] ?? ''), list = k => esc((w?.[k] || []).join(', '));
+  const m = modal(`<h3>${w ? `Edit ${esc(w.name)}` : 'Add New Website'}</h3><p>${w ? 'Changes apply to this website only.' : 'Each website has its own news sources, niche, WordPress, Claude template, SEO and automation. After saving, add its sources under Sources.'}</p>
+    <form id="site-form">
+      <div class="sf-sec">Basic info</div>
+      <div class="field-row"><div class="field"><label>Website name <em>*</em></label><input class="input" name="name" required value="${v('name')}" placeholder="Spardha Times"></div><div class="field"><label>Website URL</label><input class="input" name="url" value="${v('url')}" placeholder="https://example.com"></div></div>
+      <div class="field"><label>Description</label><input class="input" name="description" value="${v('description')}"></div>
+      <div class="field-row"><div class="field"><label>Primary niche</label><input class="input" name="niche" value="${v('niche')}" placeholder="Competitive Exams & Education"></div><div class="field"><label>Logo URL</label><input class="input" name="logo" value="${v('logo')}" placeholder="https://…/logo.png"></div></div>
+      <div class="field-row"><div class="field"><label>Article language</label><input class="input" name="language" value="${v('language')}" placeholder="Marathi"></div><div class="field"><label>Readers</label><input class="input" name="audience" value="${v('audience')}" placeholder="MPSC and UPSC aspirants"></div></div>
+      <div class="field"><label>Tone</label><input class="input" name="tone" value="${v('tone')}" placeholder="clear and exam-oriented"></div>
+      <div class="sf-sec">Niche matching</div>
+      <div class="field"><label>Topics (comma separated)</label><input class="input mr" name="topics" value="${list('topics')}" placeholder="MPSC, UPSC, Police Bharti, Government Jobs"><div class="hint">News whose title mentions a topic scores high for this website. Leave empty to take every news item from its sources.</div></div>
+      <div class="field"><label>Extra keywords</label><input class="input mr" name="keywords" value="${list('keywords')}"></div>
+      <div class="field-row"><div class="field"><label>Blocked topics</label><input class="input mr" name="blocked_topics" value="${list('blocked_topics')}" placeholder="Real Estate, Entertainment"></div><div class="field"><label>Relevance threshold (%)</label><input class="input" name="relevance_threshold" type="number" min="0" max="100" value="${w?.relevance_threshold ?? 75}"></div></div>
+      <div class="sf-sec">WordPress ${w?.connected ? '<span class="badge b-live">Connected</span>' : ''}</div>
+      <div class="field-row"><div class="field"><label>WordPress URL</label><input class="input" name="wp_url" value="${esc(w?.wp?.url || '')}" placeholder="https://example.com"></div><div class="field"><label>Username</label><input class="input" name="wp_user" value="${esc(w?.wp?.user || '')}" autocomplete="username"></div></div>
+      <div class="field"><label>Application password</label><input class="input" name="wp_password" type="password" autocomplete="new-password" placeholder="${w?.wp?.has_password ? '•••••••• (saved, leave empty to keep)' : 'xxxx xxxx xxxx xxxx xxxx xxxx'}"><div class="hint">WordPress → Users → Profile → Application Passwords. Saved for this website only. Optional now; connect it later from Websites &amp; Publishing.</div></div>
+      ${w ? '' : `<div class="sf-sec">Publishing &amp; SEO</div>
+      <div class="field-row"><div class="field"><label>Default category</label><input class="input mr" name="default_category"></div><div class="field"><label>Default tags</label><input class="input mr" name="default_tags" placeholder="comma separated"></div></div>
+      <div class="field"><label>SEO title template</label><input class="input" name="title_template" value="{title} | {site_name}"><div class="hint">You can use {title}, {site_name}, {focus_keyword} and {year}.</div></div>`}
+      <div id="sf-result"></div>
+      <div class="mbtns"><button type="button" class="btn" data-x>Cancel</button><button class="btn primary" data-busy="Saving…">${icon('save')}${w ? 'Save Website' : 'Add Website'}</button></div>
+    </form>`, 'lg');
+  $('[data-x]', m).onclick = closeModal;
+  $('#site-form', m).onsubmit = e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    busy(e.submitter, async () => {
+      const body = { id: w?.id, name: f.name, url: f.url, description: f.description, niche: f.niche, logo: f.logo, language: f.language, audience: f.audience,
+        tone: f.tone, topics: f.topics, keywords: f.keywords, blocked_topics: f.blocked_topics, relevance_threshold: Number(f.relevance_threshold || 0) };
+      if (f.wp_url && f.wp_user) body.wp = { url: f.wp_url, user: f.wp_user, password: f.wp_password };
+      try {
+        const saved = await api('/api/websites', { method: 'POST', body });
+        if (!w) { created = true; await api('/api/settings', { method: 'POST', site: saved.id,
+          body: { seo: { title_template: f.title_template || '{title}' }, publish: { default_category: f.default_category || '', default_tags: f.default_tags || '' } } }); }
+        await loadWebsites();
+        if (saved.wp_error) {   // the website is saved; only the WordPress login failed
+          $('#sf-result', m).innerHTML = `<div class="alert warn" style="margin-bottom:10px">${icon('alert')}<div><b>Website saved, but WordPress did not connect.</b><br>${esc(saved.wp_error)}</div></div>`;
+          hydrate($('#sf-result', m));
+          w = siteById(saved.id); rerender();   // a second Save edits this website instead of adding another
+          return;
+        }
+        closeModal(); toast('ok', created ? 'Website added' : 'Website saved', saved.name);
+        if (created) await setSite(saved.id);
+        else { if (S.site === saved.id) await loadState(); updateNav(); renderSiteSwitch(); rerender(); }
+      } catch (err) {
+        $('#sf-result', m).innerHTML = `<div class="alert err" style="margin-bottom:10px">${icon('alert')}<div>${esc(err.message)}</div></div>`; hydrate($('#sf-result', m));
+      }
+    });
+  };
+};
+ACTIONS['site-status'] = async el => {
+  const w = siteById(el.dataset.id), off = w.status !== 'inactive';
+  if (off && !await confirmBox({ title: `Deactivate ${w.name}?`, text: 'It stops receiving news and automation. Its articles and settings are kept; you can activate it again any time.', ok: 'Deactivate', kind: 'danger-solid' })) return;
+  await api('/api/websites', { method: 'POST', body: { id: w.id, status: off ? 'inactive' : 'active' } });
+  await loadWebsites(); toast('ok', `${w.name} ${off ? 'deactivated' : 'activated'}`); rerender();
+};
+ACTIONS['site-del'] = async el => {
+  const w = siteById(el.dataset.id);
+  if (!await confirmBox({ title: `Delete ${w.name}?`, text: 'This website has no articles. Its settings, Claude templates and automation rules are removed. This cannot be undone.', ok: 'Delete', kind: 'danger-solid' })) return;
+  try { await api(`/api/websites/${encodeURIComponent(w.id)}`, { method: 'DELETE' }); }
+  catch (e) { return toast('err', 'Could not delete', e.message); }
+  const before = S.site;
+  await loadWebsites(); toast('ok', `${w.name} deleted`);
+  // the selected website may have changed (deleted, or only one website left): reload everything for it
+  if (S.site !== before) await Promise.all([loadState(), loadArticles(), loadTitles(), loadWp()]).catch(() => {});
+  go();
 };

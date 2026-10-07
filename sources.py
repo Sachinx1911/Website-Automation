@@ -121,6 +121,21 @@ def _date(text: str) -> str:
         return text[:10] if re.match(r"\d{4}-\d{2}-\d{2}", text or "") else ""
 
 
+def _time(text: str) -> str:
+    """Publish date and time (local, ISO) from an RSS / Atom date, or "" when the feed has none."""
+    text = (text or "").strip()
+    try:
+        dt = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+    if dt.tzinfo:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt.isoformat(timespec="seconds")
+
+
 def _skip(title: str, skip) -> bool:
     return any(s.lower() in title.lower() for s in (skip or []))
 
@@ -137,7 +152,7 @@ def fetch_rss(url: str, skip=None, **_) -> list[dict]:
         if title and href and not _skip(title, skip):
             excerpt = " ".join(re.sub(r"<[^>]+>", " ", html.unescape(desc.get_text())).split())[:220] if desc else ""
             items.append({"title": html.unescape(title), "url": href, "excerpt": excerpt,
-                          "date": _date(when.get_text()) if when else ""})
+                          "date": _date(when.get_text()) if when else "", "time": _time(when.get_text()) if when else ""})
     return items
 
 
@@ -151,7 +166,7 @@ def fetch_wordpress(base: str, post_type: str = "posts", params: dict | None = N
         if title and not _skip(title, skip):
             raw = (x.get("excerpt") or {}).get("rendered", "")
             excerpt = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", raw)).split())[:220]
-            items.append({"title": title, "url": x["link"], "date": x["date"][:10], "excerpt": excerpt})
+            items.append({"title": title, "url": x["link"], "date": x["date"][:10], "time": x["date"][:19], "excerpt": excerpt})
     return items
 
 
@@ -219,9 +234,9 @@ def fetch_source(src: dict) -> list[dict]:
     return out
 
 
-def fetch_all() -> tuple[list[dict], dict[str, str], dict[str, dict]]:
-    """Returns (items, errors by source name, stats by source id)."""
-    active = [s for s in load_sources() if s.get("enabled", True)]
+def fetch_all(only: list[dict] | None = None) -> tuple[list[dict], dict[str, str], dict[str, dict]]:
+    """Returns (items, errors by source name, stats by source id). only: just these sources (one website's)."""
+    active = [s for s in (load_sources() if only is None else only) if s.get("enabled", True)]
     items, errors, stats = [], {}, {}
 
     def run(src):

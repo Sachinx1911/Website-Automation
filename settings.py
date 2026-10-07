@@ -76,15 +76,19 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
-def load_settings() -> dict:
+def load_settings(site: dict | None = None) -> dict:
+    """Global settings; with a website, its own publishing / SEO / content / structure settings on top."""
     if SETTINGS_FILE.exists():
         s = _deep_merge(DEFAULTS, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
         # an older UI bug saved top-level values (model, writers) as {"undefined": value}; unwrap them
         for k, v in DEFAULTS.items():
             if not isinstance(v, dict) and isinstance(s.get(k), dict):
                 s[k] = next(iter(s[k].values()), v)
-        return s
-    return json.loads(json.dumps(DEFAULTS))
+    else:
+        s = json.loads(json.dumps(DEFAULTS))
+    if site and site.get("settings"):
+        s = _deep_merge(s, site["settings"])
+    return s
 
 
 def save_settings(changes: dict) -> dict:
@@ -121,25 +125,39 @@ def default_template() -> dict:
     return next((t for t in items if t.get("default")), items[0])
 
 
-def get_template(tid: str | None) -> dict:
-    if tid:
-        for t in load_templates():
-            if t["id"] == tid:
+def get_template(tid: str | None, site: dict | None = None) -> dict:
+    """The article's own template, else the website's default template, else the global default."""
+    items = load_templates()
+    for want in (tid, (site or {}).get("template_id")):
+        if want:
+            t = next((t for t in items if t["id"] == want), None)
+            if t:
                 return t
+    if site:
+        t = next((t for t in items if t.get("website_id") == site["id"]), None)
+        if t:
+            return t
     return default_template()
 
 
-def upsert_template(data: dict) -> dict:
+def templates_for(site: dict | None) -> list[dict]:
+    """Templates of a website (All Websites: every template). One website's prompt is never changed from another."""
+    items = load_templates()
+    return items if not site else [t for t in items if t.get("website_id") == site["id"]]
+
+
+def upsert_template(data: dict, website_id: str | None = None) -> dict:
+    """website_id: a template created while a website is selected belongs to that website."""
     items = load_templates()
     tid = data.get("id")
     tpl = next((t for t in items if t["id"] == tid), None)
     if tpl is None:
-        tpl = {"id": uuid.uuid4().hex[:8], "default": not items}
+        tpl = {"id": uuid.uuid4().hex[:8], "default": not items, "website_id": website_id}
         items.append(tpl)
     for key in ("name", "description", "system", "user", "model"):
         if key in data:
             tpl[key] = data[key]
-    if data.get("default"):
+    if data.get("default") and not website_id:
         for t in items:
             t["default"] = t is tpl
     save_templates(items)
