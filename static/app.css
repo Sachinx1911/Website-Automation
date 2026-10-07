@@ -891,3 +891,12 @@ th, .disc-head { color: var(--muted); }      /* table headers: same look, a litt
 }
 .btn.block-btn { justify-content: center; }
 .logo { flex: none; }   /* never squeezed into an oval when the sidebar is narrow */
+
+/* brand logos: filled shapes; in the sidebar in their own colours (Claude orange, WordPress blue) */
+i[data-i="wp"] svg, i[data-i="claude"] svg { fill: currentColor; stroke: none; }
+.nav a i[data-i="claude"] { color: #D97757; }
+.nav a i[data-i="wp"] { color: #21759B; }
+[data-theme="dark"] .nav a i[data-i="wp"] { color: #3FA9DC; }   /* WordPress light blue: visible on the navy sidebar */
+/* on the blue active row the logo sits on a small white disc, so it keeps its own colour */
+.nav a.active i[data-i="claude"], .nav a.active i[data-i="wp"] { background: #fff; border-radius: 50%; box-shadow: 0 0 0 3px #fff; }
+.nav a.active i[data-i="wp"] { color: #21759B; }

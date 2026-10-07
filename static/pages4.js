@@ -82,7 +82,7 @@ ROUTES.help = async function (first) {
     <div class="stack sticky">
       <div class="card section"><div class="section-title" style="margin-bottom:10px">System status</div>
         <div class="sum-row">${icon('wp')}WordPress<div class="sv">${S.state.wp_ready ? '<span class="badge b-live">Connected</span>' : '<a class="badge b-failed" href="#/wordpress">Not connected</a>'}</div></div>
-        <div class="sum-row">${icon('spark')}Claude Code<div class="sv">${S.claude?.logged_in ? '<span class="badge b-live">Logged in</span>' : '<a class="badge b-failed" href="#/claude">Login needed</a>'}</div></div>
+        <div class="sum-row">${icon('claude')}Claude Code<div class="sv">${S.claude?.logged_in ? '<span class="badge b-live">Logged in</span>' : '<a class="badge b-failed" href="#/claude">Login needed</a>'}</div></div>
         <div class="sum-row">${icon('bank')}Sources<div class="sv">${S.state.sources_active} active${S.state.sources_errors ? ` · <span style="color:var(--danger)">${S.state.sources_errors} errors</span>` : ''}</div></div>
         <div class="sum-row">${icon('layers')}Queue<div class="sv">${S.counts.working || 0} processing</div></div></div>
       <div class="card section"><div class="section-title" style="margin-bottom:10px">Keyboard shortcuts</div>${shortcuts.map(([k, d]) => `<div class="sum-row"><code>${k}</code><div class="sv">${d}</div></div>`).join('')}</div>
